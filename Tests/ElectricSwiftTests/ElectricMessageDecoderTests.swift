@@ -30,7 +30,11 @@ struct ElectricMessageDecoderTests {
         """.data(using: .utf8)!
 
         let messages = try JSONDecoder().decode([ElectricMessage].self, from: payload)
-        let coerced = PostgresValueParser.coerce(messages: messages, schema: schema)
+        let coerced = try PostgresValueParser.coerce(
+            messages: messages,
+            schema: schema,
+            parser: .default
+        )
 
         let row = try #require(coerced.first?.value)
         #expect(row["id"] == .integer(42))

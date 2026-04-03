@@ -255,4 +255,43 @@ struct ShapeTests {
         #expect(await shape.error() != nil)
         await shape.stop()
     }
+
+    @Test("rows surfaces parser errors from the stream")
+    func rowsSurfacesParserErrors() async throws {
+        let transport = TestShapeTransport()
+        let url = URL(string: "https://example.com/v1/shape")!
+
+        await transport.enqueueHTTP(
+            response: httpResponse(
+                url: url,
+                statusCode: 200,
+                headers: [
+                    "electric-handle": "h1",
+                    "electric-offset": "1_0",
+                    "electric-schema": #"{"id":{"type":"int8","not_null":true}}"#,
+                ]
+            ),
+            data: try jsonData([
+                ElectricMessage(
+                    key: "todo:1",
+                    value: ["id": .null],
+                    headers: .init(operation: .insert)
+                ),
+                .upToDate(),
+            ])
+        )
+
+        let stream = ShapeStream(
+            shape: ElectricShape(url: url, table: "todos"),
+            configuration: .init(subscribe: false),
+            transport: transport
+        )
+        let shape = Shape<Todo>(stream: stream)
+
+        await #expect(throws: ShapeError.self) {
+            _ = try await shape.rows()
+        }
+        #expect(await shape.error() != nil)
+        await shape.stop()
+    }
 }

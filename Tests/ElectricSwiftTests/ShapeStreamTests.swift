@@ -198,6 +198,50 @@ struct ShapeStreamTests {
         #expect(row["scores"] == .array([.integer(1), .integer(2), .integer(3)]))
     }
 
+    @Test("Custom parser is used during normal polling")
+    func customParserIsUsedDuringNormalPolling() async throws {
+        MockURLProtocol.reset()
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+        let url = URL(string: "https://example.com/v1/shape")!
+
+        MockURLProtocol.enqueue(
+            response: httpResponse(
+                url: url,
+                statusCode: 200,
+                headers: [
+                    "electric-handle": "h1",
+                    "electric-offset": "1_0",
+                    "electric-schema": #"{"id":{"type":"int8"}}"#,
+                ]
+            ),
+            data: try jsonData([
+                ElectricMessage(
+                    key: "todo:1",
+                    value: ["id": .string("1")],
+                    headers: .init(operation: .insert)
+                ),
+                .upToDate(),
+            ])
+        )
+
+        let stream = ShapeStream(
+            shape: ElectricShape(url: url, table: "todos"),
+            configuration: .init(subscribe: false),
+            session: session,
+            parser: ElectricParser(
+                scalarParsers: [
+                    "int8": { value, _ in
+                        .string("custom-\(value)")
+                    },
+                ]
+            )
+        )
+
+        let batch = try #require(await stream.poll())
+        #expect(batch.messages.first?.value?["id"] == .string("custom-1"))
+    }
+
     @Test("SSE buffers events until up-to-date and yields a live batch")
     func sseBuffersUntilUpToDate() async throws {
         let transport = TestShapeTransport()
@@ -261,6 +305,66 @@ struct ShapeStreamTests {
         let requestURL = try #require(requests.last?.url)
         let components = try #require(URLComponents(url: requestURL, resolvingAgainstBaseURL: false))
         #expect(components.queryItems?.contains(.init(name: "live_sse", value: "true")) == true)
+    }
+
+    @Test("Custom parser is used during SSE batches")
+    func customParserIsUsedDuringSSEBatches() async throws {
+        let transport = TestShapeTransport()
+        let url = URL(string: "https://example.com/v1/shape")!
+        let schema = #"{"id":{"type":"int8"}}"#
+        let response = httpResponse(
+            url: url,
+            statusCode: 200,
+            headers: [
+                "electric-handle": "h-live",
+                "electric-offset": "2_0",
+                "electric-cursor": "cursor-live",
+                "electric-schema": schema,
+            ]
+        )
+
+        let insert = try jsonData(
+            ElectricMessage(
+                key: "todo:1",
+                value: ["id": .string("1")],
+                headers: .init(operation: .insert)
+            )
+        )
+        let upToDate = try jsonData(ElectricMessage(headers: .init(control: .upToDate, globalLastSeenLSN: "8")))
+
+        await transport.enqueueSSE(
+            response: response,
+            chunks: [
+                Data("data: ".utf8) + insert + Data("\n\n".utf8),
+                Data("data: ".utf8) + upToDate + Data("\n\n".utf8),
+            ]
+        )
+
+        let stream = ShapeStream(
+            shape: ElectricShape(url: url, table: "todos"),
+            configuration: .init(
+                subscribe: true,
+                initialState: .init(
+                    handle: "h-live",
+                    offset: "2_0",
+                    cursor: "cursor-live",
+                    isLive: true,
+                    isUpToDate: true,
+                    schema: try JSONDecoder().decode(ElectricSchema.self, from: Data(schema.utf8))
+                )
+            ),
+            transport: transport,
+            parser: ElectricParser(
+                scalarParsers: [
+                    "int8": { value, _ in
+                        .string("custom-\(value)")
+                    },
+                ]
+            )
+        )
+
+        let batch = try #require(await stream.poll())
+        #expect(batch.messages.first?.value?["id"] == .string("custom-1"))
     }
 
     @Test("Repeated short SSE connections fall back to live long-poll")
@@ -933,6 +1037,56 @@ struct ShapeStreamTests {
         #expect(state.cursor == "cursor-replay")
     }
 
+    @Test("Row transform does not bypass replay suppression")
+    func rowTransformPreservesReplaySuppression() async throws {
+        ElectricTrackers.upToDate.clear()
+        let transport = TestShapeTransport()
+        let url = URL(string: "https://example.com/v1/shape")!
+        let shape = ElectricShape(url: url, table: "todos")
+        let shapeKey = ShapeRequestBuilder.canonicalShapeKey(shape: shape)
+        ElectricTrackers.upToDate.recordUpToDate(shapeKey: shapeKey, cursor: "cursor-replay")
+
+        await transport.enqueueHTTP(
+            response: httpResponse(
+                url: url,
+                statusCode: 200,
+                headers: [
+                    "electric-handle": "h1",
+                    "electric-offset": "1_0",
+                    "electric-cursor": "cursor-replay",
+                    "electric-schema": #"{"id":{"type":"int8"},"title":{"type":"text"}}"#,
+                ]
+            ),
+            data: try jsonData([
+                ElectricMessage(
+                    key: "\"public\".\"todos\"/1",
+                    value: ["id": .string("1"), "title": .string("replay")],
+                    headers: .init(operation: .insert)
+                ),
+                .upToDate(),
+            ])
+        )
+
+        let stream = ShapeStream(
+            shape: shape,
+            configuration: .init(subscribe: true, preferSSE: false),
+            transport: transport,
+            parser: ElectricParser(rowTransform: { row in
+                var row = row
+                if case .string(let title)? = row["title"] {
+                    row["title"] = .string(title.uppercased())
+                }
+                return row
+            })
+        )
+
+        let batch = try await stream.poll()
+        #expect(batch == nil)
+        let state = await stream.currentState()
+        #expect(state.isUpToDate == true)
+        #expect(state.cursor == "cursor-replay")
+    }
+
     @Test("Emits message-level debug events for the read path")
     func emitsReadTraceEvents() async throws {
         MockURLProtocol.reset()
@@ -1349,6 +1503,83 @@ struct ShapeStreamTests {
 
         await #expect(throws: FetchError.self) {
             _ = try await stream.poll()
+        }
+    }
+
+    @Test("Parser errors surface through poll")
+    func parserErrorsSurfaceThroughPoll() async throws {
+        MockURLProtocol.reset()
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+        let url = URL(string: "https://example.com/v1/shape")!
+
+        MockURLProtocol.enqueue(
+            response: httpResponse(
+                url: url,
+                statusCode: 200,
+                headers: [
+                    "electric-handle": "h1",
+                    "electric-offset": "1_0",
+                    "electric-schema": #"{"id":{"type":"int8","not_null":true}}"#,
+                ]
+            ),
+            data: try jsonData([
+                ElectricMessage(
+                    key: "todo:1",
+                    value: ["id": .null],
+                    headers: .init(operation: .insert)
+                ),
+                .upToDate(),
+            ])
+        )
+
+        let stream = ShapeStream(
+            shape: ElectricShape(url: url, table: "todos"),
+            configuration: .init(subscribe: false),
+            session: session
+        )
+
+        await #expect(throws: ElectricParserError.self) {
+            _ = try await stream.poll()
+        }
+    }
+
+    @Test("Parser errors surface through batches")
+    func parserErrorsSurfaceThroughBatches() async throws {
+        MockURLProtocol.reset()
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+        let url = URL(string: "https://example.com/v1/shape")!
+
+        MockURLProtocol.enqueue(
+            response: httpResponse(
+                url: url,
+                statusCode: 200,
+                headers: [
+                    "electric-handle": "h1",
+                    "electric-offset": "1_0",
+                    "electric-schema": #"{"id":{"type":"int8","not_null":true}}"#,
+                ]
+            ),
+            data: try jsonData([
+                ElectricMessage(
+                    key: "todo:1",
+                    value: ["id": .null],
+                    headers: .init(operation: .insert)
+                ),
+                .upToDate(),
+            ])
+        )
+
+        let stream = ShapeStream(
+            shape: ElectricShape(url: url, table: "todos"),
+            configuration: .init(subscribe: false),
+            session: session
+        )
+
+        var iterator = await stream.batches().makeAsyncIterator()
+        await #expect(throws: ElectricParserError.self) {
+            _ = try await iterator.next()
         }
     }
 
@@ -1789,6 +2020,59 @@ struct ShapeStreamTests {
         #expect(state.offset == "-1")
     }
 
+    @Test("Custom parser is used during fetchSnapshot")
+    func customParserIsUsedDuringFetchSnapshot() async throws {
+        let transport = TestShapeTransport()
+        let url = URL(string: "https://example.com/v1/shape")!
+        let payload = """
+        {
+          "metadata": {
+            "snapshot_mark": 1,
+            "xmin": "100",
+            "xmax": "200",
+            "xip_list": [],
+            "database_lsn": "123"
+          },
+          "data": [
+            {
+              "key": "todo:1",
+              "value": { "id": "1" },
+              "headers": { "operation": "insert" }
+            }
+          ]
+        }
+        """
+
+        await transport.enqueueHTTP(
+            response: httpResponse(
+                url: url,
+                statusCode: 200,
+                headers: [
+                    "electric-schema": #"{"id":{"type":"int8"}}"#,
+                    "electric-handle": "h1",
+                    "electric-offset": "5_0",
+                ]
+            ),
+            data: Data(payload.utf8)
+        )
+
+        let stream = ShapeStream(
+            shape: ElectricShape(url: url, table: "todos"),
+            configuration: .init(subscribe: false),
+            transport: transport,
+            parser: ElectricParser(
+                scalarParsers: [
+                    "int8": { value, _ in
+                        .string("custom-\(value)")
+                    },
+                ]
+            )
+        )
+
+        let snapshot = try await stream.fetchSnapshot(.init(limit: 1))
+        #expect(snapshot.messages.first?.value?["id"] == .string("custom-1"))
+    }
+
     @Test("fetchSnapshot POST sends subset params in request body")
     func fetchSnapshotPostSendsSubsetBody() async throws {
         let transport = TestShapeTransport()
@@ -1916,6 +2200,61 @@ struct ShapeStreamTests {
         let live = try #require(await stream.poll())
         #expect(live.messages.contains(where: { $0.key == "todo:2" }))
         #expect(live.messages.contains(where: { $0.key == "todo:1" }) == false)
+    }
+
+    @Test("Custom parser is used during requestSnapshot")
+    func customParserIsUsedDuringRequestSnapshot() async throws {
+        let transport = TestShapeTransport()
+        let url = URL(string: "https://example.com/v1/shape")!
+        let payload = """
+        {
+          "metadata": {
+            "snapshot_mark": 1,
+            "xmin": "100",
+            "xmax": "200",
+            "xip_list": [],
+            "database_lsn": "123"
+          },
+          "data": [
+            {
+              "key": "todo:1",
+              "value": { "id": "1" },
+              "headers": { "operation": "insert" }
+            }
+          ]
+        }
+        """
+
+        await transport.enqueueHTTP(
+            response: httpResponse(
+                url: url,
+                statusCode: 200,
+                headers: [
+                    "electric-schema": #"{"id":{"type":"int8"}}"#,
+                    "electric-handle": "h1",
+                    "electric-offset": "5_0",
+                ]
+            ),
+            data: Data(payload.utf8)
+        )
+
+        let stream = ShapeStream(
+            shape: ElectricShape(url: url, table: "todos"),
+            configuration: .init(subscribe: true),
+            transport: transport,
+            parser: ElectricParser(
+                scalarParsers: [
+                    "int8": { value, _ in
+                        .string("custom-\(value)")
+                    },
+                ]
+            )
+        )
+
+        let snapshot = try await stream.requestSnapshot(.init(limit: 1))
+        #expect(snapshot.messages.first?.value?["id"] == .string("custom-1"))
+        let injected = try #require(await stream.poll())
+        #expect(injected.messages.first(where: { $0.key == "todo:1" })?.value?["id"] == .string("custom-1"))
     }
 
     @Test("requestSnapshot can complete while initial sync is in progress")
@@ -2193,6 +2532,123 @@ struct ShapeStreamTests {
         #expect(state.phase == .liveLongPoll)
         #expect(state.isUpToDate == true)
         #expect(state.schema["id"]?.type == "int8")
+    }
+
+    @Test("Row transform does not bypass snapshot duplicate filtering")
+    func rowTransformPreservesSnapshotFiltering() async throws {
+        let transport = TestShapeTransport()
+        let url = URL(string: "https://example.com/v1/shape")!
+        let snapshotPayload = """
+        {
+          "metadata": {
+            "snapshot_mark": 1,
+            "xmin": "100",
+            "xmax": "200",
+            "xip_list": [],
+            "database_lsn": "123"
+          },
+          "data": [
+            {
+              "key": "todo:1",
+              "value": { "id": "1", "title": "snap" },
+              "headers": { "operation": "insert" }
+            }
+          ]
+        }
+        """
+
+        await transport.enqueueHTTP(
+            response: httpResponse(
+                url: url,
+                statusCode: 200,
+                headers: [
+                    "electric-schema": #"{"id":{"type":"int8"},"title":{"type":"text"}}"#,
+                    "electric-handle": "h1",
+                    "electric-offset": "5_0",
+                ]
+            ),
+            data: Data(snapshotPayload.utf8)
+        )
+        await transport.enqueueHTTP(
+            response: httpResponse(
+                url: url,
+                statusCode: 200,
+                headers: [
+                    "electric-schema": #"{"id":{"type":"int8"},"title":{"type":"text"}}"#,
+                    "electric-handle": "h1",
+                    "electric-offset": "6_0",
+                ]
+            ),
+            data: try jsonData([
+                ElectricMessage(
+                    key: "todo:1",
+                    value: ["id": .string("1"), "title": .string("dup")],
+                    headers: .init(operation: .update, txids: [50])
+                ),
+                ElectricMessage(
+                    key: "todo:2",
+                    value: ["id": .string("2"), "title": .string("fresh")],
+                    headers: .init(operation: .insert, txids: [50])
+                ),
+                .upToDate(),
+            ])
+        )
+
+        let stream = ShapeStream(
+            shape: ElectricShape(url: url, table: "todos"),
+            configuration: .init(subscribe: true),
+            transport: transport,
+            parser: ElectricParser(rowTransform: { row in
+                var row = row
+                if case .string(let title)? = row["title"] {
+                    row["title"] = .string(title.uppercased())
+                }
+                return row
+            })
+        )
+
+        let snapshot = try await stream.requestSnapshot(.init(limit: 1))
+        #expect(snapshot.messages.first?.value?["title"] == .string("SNAP"))
+        _ = try #require(await stream.poll())
+        let live = try #require(await stream.poll())
+        #expect(live.messages.contains(where: { $0.key == "todo:2" && $0.value?["title"] == .string("FRESH") }))
+        #expect(live.messages.contains(where: { $0.key == "todo:1" }) == false)
+    }
+
+    @Test("Row transform does not bypass must-refetch handling")
+    func rowTransformPreservesMustRefetchHandling() async throws {
+        MockURLProtocol.reset()
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+        let url = URL(string: "https://example.com/v1/shape")!
+
+        MockURLProtocol.enqueue(
+            response: httpResponse(
+                url: url,
+                statusCode: 409,
+                headers: [
+                    "Location": "https://example.com/v1/shape?handle=replaced-handle",
+                ]
+            )
+        )
+
+        let stream = ShapeStream(
+            shape: ElectricShape(url: url, table: "todos"),
+            configuration: .init(initialState: .init(handle: "old", offset: "9_0", isLive: true)),
+            session: session,
+            parser: ElectricParser(rowTransform: { row in
+                var row = row
+                row["transformed"] = .boolean(true)
+                return row
+            })
+        )
+
+        let batch = try await stream.poll()
+        #expect(batch?.messages == [.mustRefetch()])
+        let state = await stream.currentState()
+        #expect(state.handle == "replaced-handle")
+        #expect(state.offset == "-1")
+        #expect(state.isUpToDate == false)
     }
 
     @Test("Invariant matrix preserves expected phase and checkpoint changes")

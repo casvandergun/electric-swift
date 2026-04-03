@@ -37,6 +37,7 @@ public actor ShapeStream {
     private var shape: ElectricShape
     private let configuration: ShapeStreamConfiguration
     private let transport: any ElectricShapeTransport
+    private let parser: ElectricParser
     private let debugLogger: ElectricDebugLogger
     private let recoveryPolicy: ShapeStreamRecoveryPolicy
     private let onError: ShapeStreamErrorHandler?
@@ -67,6 +68,7 @@ public actor ShapeStream {
         shape: ElectricShape,
         configuration: ShapeStreamConfiguration = .init(),
         session: URLSession = .shared,
+        parser: ElectricParser = .default,
         debugLogger: ElectricDebugLogger = .disabled,
         onError: ShapeStreamErrorHandler? = nil
     ) {
@@ -74,6 +76,7 @@ public actor ShapeStream {
             shape: shape,
             configuration: configuration,
             transport: URLSessionElectricShapeTransport(session: session),
+            parser: parser,
             debugLogger: debugLogger,
             recoveryPolicy: .live,
             onError: onError
@@ -84,6 +87,7 @@ public actor ShapeStream {
         shape: ElectricShape,
         configuration: ShapeStreamConfiguration = .init(),
         transport: any ElectricShapeTransport,
+        parser: ElectricParser = .default,
         debugLogger: ElectricDebugLogger = .disabled,
         recoveryPolicy: ShapeStreamRecoveryPolicy = .live,
         onError: ShapeStreamErrorHandler? = nil
@@ -91,6 +95,7 @@ public actor ShapeStream {
         self.shape = shape
         self.configuration = configuration
         self.transport = transport
+        self.parser = parser
         self.debugLogger = debugLogger
         self.recoveryPolicy = recoveryPolicy
         self.onError = onError
@@ -441,7 +446,11 @@ public actor ShapeStream {
                         )
                         let data = Data(event.data.utf8)
                         let decoded = try decoder.decode(ElectricMessage.self, from: data)
-                        let message = PostgresValueParser.coerce(messages: [decoded], schema: state.schema).first ?? decoded
+                        let message = try PostgresValueParser.coerce(
+                            messages: [decoded],
+                            schema: state.schema,
+                            parser: parser
+                        ).first ?? decoded
                         logMessage(message, source: "sse", eventName: event.effectiveEvent)
                         bufferedMessages.append(message)
 
@@ -839,7 +848,7 @@ public actor ShapeStream {
             return []
         }
         let messages = try decoder.decode([ElectricMessage].self, from: data)
-        let coercedMessages = PostgresValueParser.coerce(messages: messages, schema: schema)
+        let coercedMessages = try PostgresValueParser.coerce(messages: messages, schema: schema, parser: parser)
         for message in coercedMessages {
             logMessage(message, source: source)
         }
@@ -983,7 +992,11 @@ public actor ShapeStream {
                 case 200:
                     let payload = try decoder.decode(ShapeSnapshotPayload.self, from: result.data)
                     let effectiveSchema = snapshotSchema(from: result.response)
-                    let messages = PostgresValueParser.coerce(messages: payload.data, schema: effectiveSchema)
+                    let messages = try PostgresValueParser.coerce(
+                        messages: payload.data,
+                        schema: effectiveSchema,
+                        parser: parser
+                    )
                     let responseHandle = result.response.value(forHTTPHeaderField: ElectricProtocolValues.handleHeader)
                     let responseOffset = result.response.value(forHTTPHeaderField: ElectricProtocolValues.offsetHeader)
 

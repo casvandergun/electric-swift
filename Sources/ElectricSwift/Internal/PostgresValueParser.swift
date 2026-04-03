@@ -1,89 +1,80 @@
 import Foundation
 
 enum PostgresValueParser {
-    static func coerce(messages: [ElectricMessage], schema: ElectricSchema) -> [ElectricMessage] {
-        guard schema.isEmpty == false else { return messages }
+    static func coerce(
+        messages: [ElectricMessage],
+        schema: ElectricSchema,
+        parser: ElectricParser
+    ) throws -> [ElectricMessage] {
+        if schema.isEmpty, parser.rowTransform == nil {
+            return messages
+        }
 
-        return messages.map { message in
+        return try messages.map { message in
             var updated = message
             if let value = message.value {
-                updated.value = coerce(row: value, schema: schema)
+                updated.value = try coerce(row: value, schema: schema, parser: parser)
             }
             if let oldValue = message.oldValue {
-                updated.oldValue = coerce(row: oldValue, schema: schema)
+                updated.oldValue = try coerce(row: oldValue, schema: schema, parser: parser)
             }
             return updated
         }
     }
 
-    private static func coerce(row: ElectricRow, schema: ElectricSchema) -> ElectricRow {
-        Dictionary(uniqueKeysWithValues: row.map { key, value in
+    private static func coerce(
+        row: ElectricRow,
+        schema: ElectricSchema,
+        parser: ElectricParser
+    ) throws -> ElectricRow {
+        let coerced = try Dictionary(uniqueKeysWithValues: row.map { key, value in
             guard let column = schema[key] else {
                 return (key, value)
             }
-            return (key, coerce(value: value, column: column))
+            return (key, try coerce(value: value, column: column, columnName: key, parser: parser))
         })
+        return try parser.transform(row: coerced)
     }
 
-    private static func coerce(value: ElectricValue, column: ElectricColumnDefinition) -> ElectricValue {
+    private static func coerce(
+        value: ElectricValue,
+        column: ElectricColumnDefinition,
+        columnName: String,
+        parser: ElectricParser
+    ) throws -> ElectricValue {
         switch value {
         case .null:
+            if column.notNull == true {
+                throw ElectricParserError.nullInNonNullableColumn(columnName)
+            }
             return .null
         case .array, .object, .boolean, .integer, .double:
             return value
         case .string(let raw):
             if let dims = column.dims, dims > 0 {
-                return parseArray(raw, column: column)
+                return try parseArray(raw, column: column, columnName: columnName, parser: parser)
             }
-
-            switch column.type {
-            case "int2", "int4", "int8", "oid":
-                if let parsed = Int64(raw) {
-                    return .integer(parsed)
-                }
-                return .string(raw)
-            case "float4", "float8", "numeric":
-                if let parsed = Double(raw) {
-                    return .double(parsed)
-                }
-                return .string(raw)
-            case "bool":
-                if raw == "t" || raw == "true" {
-                    return .boolean(true)
-                }
-                if raw == "f" || raw == "false" {
-                    return .boolean(false)
-                }
-                return .string(raw)
-            case "json", "jsonb":
-                guard let data = raw.data(using: .utf8) else {
-                    return .string(raw)
-                }
-                return (try? JSONDecoder().decode(ElectricValue.self, from: data)) ?? .string(raw)
-            default:
-                return .string(raw)
-            }
+            return try parser.scalarParser(for: column.type)?(raw, column) ?? .string(raw)
         }
     }
 
-    private static func parseArray(_ input: String, column: ElectricColumnDefinition) -> ElectricValue {
+    private static func parseArray(
+        _ input: String,
+        column: ElectricColumnDefinition,
+        columnName: String,
+        parser: ElectricParser
+    ) throws -> ElectricValue {
         var index = input.startIndex
-        let parsed = parseArrayContents(input, index: &index) {
-            guard let token = $0 else {
-                return .null
+        let parsed = try parseArrayContents(input, index: &index) { token in
+            guard let token else {
+                return try coerce(value: .null, column: scalarColumn(from: column), columnName: columnName, parser: parser)
             }
-            var scalarColumn = column
-            scalarColumn = .init(
-                type: column.type,
-                dims: nil,
-                notNull: column.notNull,
-                maxLength: column.maxLength,
-                length: column.length,
-                precision: column.precision,
-                scale: column.scale,
-                fields: column.fields
+            return try coerce(
+                value: .string(token),
+                column: scalarColumn(from: column),
+                columnName: columnName,
+                parser: parser
             )
-            return coerce(value: .string(token), column: scalarColumn)
         }
         return .array(parsed)
     }
@@ -91,11 +82,13 @@ enum PostgresValueParser {
     private static func parseArrayContents(
         _ input: String,
         index: inout String.Index,
-        leafParser: (String?) -> ElectricValue
-    ) -> [ElectricValue] {
+        leafParser: (String?) throws -> ElectricValue
+    ) throws -> [ElectricValue] {
         var results: [ElectricValue] = []
         var current = ""
         var isQuoted = false
+        var tokenWasQuoted = false
+        var justParsedNestedArray = false
 
         if index < input.endIndex, input[index] == "{" {
             index = input.index(after: index)
@@ -116,6 +109,7 @@ enum PostgresValueParser {
 
                 if character == "\"" {
                     isQuoted = false
+                    tokenWasQuoted = true
                     index = input.index(after: index)
                     continue
                 }
@@ -130,35 +124,61 @@ enum PostgresValueParser {
                 isQuoted = true
                 index = input.index(after: index)
             case "{":
-                let nested = parseArrayContents(input, index: &index, leafParser: leafParser)
+                let nested = try parseArrayContents(input, index: &index, leafParser: leafParser)
                 results.append(.array(nested))
+                justParsedNestedArray = true
             case "}":
-                if current.isEmpty == false || results.isEmpty {
-                    results.append(leafParser(normalizeToken(current)))
+                if current.isEmpty == false || tokenWasQuoted {
+                    results.append(try leafParser(normalizeToken(current, wasQuoted: tokenWasQuoted)))
                     current.removeAll(keepingCapacity: true)
                 }
+                tokenWasQuoted = false
+                justParsedNestedArray = false
                 index = input.index(after: index)
                 return results
             case ",":
-                results.append(leafParser(normalizeToken(current)))
+                if current.isEmpty == false || tokenWasQuoted || justParsedNestedArray == false {
+                    if current.isEmpty == false || tokenWasQuoted {
+                        results.append(try leafParser(normalizeToken(current, wasQuoted: tokenWasQuoted)))
+                    }
+                }
                 current.removeAll(keepingCapacity: true)
+                tokenWasQuoted = false
+                justParsedNestedArray = false
                 index = input.index(after: index)
             default:
                 current.append(character)
+                justParsedNestedArray = false
                 index = input.index(after: index)
             }
         }
 
-        if current.isEmpty == false {
-            results.append(leafParser(normalizeToken(current)))
+        if current.isEmpty == false || tokenWasQuoted {
+            results.append(try leafParser(normalizeToken(current, wasQuoted: tokenWasQuoted)))
         }
 
         return results
     }
 
-    private static func normalizeToken(_ token: String) -> String? {
-        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+    private static func scalarColumn(from column: ElectricColumnDefinition) -> ElectricColumnDefinition {
+        .init(
+            type: column.type,
+            dims: nil,
+            notNull: column.notNull,
+            maxLength: column.maxLength,
+            length: column.length,
+            precision: column.precision,
+            scale: column.scale,
+            fields: column.fields
+        )
+    }
+
+    private static func normalizeToken(_ token: String, wasQuoted: Bool) -> String? {
+        let trimmed = wasQuoted ? token : token.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed == "NULL" {
+            if wasQuoted {
+                return trimmed
+            }
             return nil
         }
         return trimmed
