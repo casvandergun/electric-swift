@@ -242,6 +242,102 @@ struct ShapeStreamTests {
         #expect(batch.messages.first?.value?["id"] == .string("custom-1"))
     }
 
+    @Test("Dynamic headers are applied to polling requests and override static headers")
+    func dynamicHeadersAreAppliedToPollingRequests() async throws {
+        let transport = TestShapeTransport()
+        let url = URL(string: "https://example.com/v1/shape")!
+
+        await transport.enqueueHTTP(
+            response: httpResponse(
+                url: url,
+                statusCode: 204,
+                headers: [
+                    "electric-handle": "h1",
+                    "electric-offset": "0_0",
+                    "electric-schema": "{}",
+                ]
+            )
+        )
+
+        let stream = ShapeStream(
+            shape: ElectricShape(
+                url: url,
+                table: "todos",
+                headers: [
+                    "Authorization": "old-token",
+                    "X-Static": "static",
+                ]
+            ),
+            configuration: .init(subscribe: false),
+            transport: transport,
+            headersProvider: {
+                [
+                    "Authorization": "new-token",
+                    "X-Dynamic": "dynamic",
+                ]
+            }
+        )
+
+        _ = try #require(await stream.poll())
+
+        let request = try #require((await transport.requests()).last)
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "new-token")
+        #expect(request.value(forHTTPHeaderField: "X-Static") == "static")
+        #expect(request.value(forHTTPHeaderField: "X-Dynamic") == "dynamic")
+    }
+
+    @Test("Dynamic headers are re-resolved for each outgoing request")
+    func dynamicHeadersAreResolvedForEachRequest() async throws {
+        let transport = TestShapeTransport()
+        let provider = HeaderSequenceProvider()
+        let url = URL(string: "https://example.com/v1/shape")!
+
+        await transport.enqueueHTTP(
+            response: httpResponse(
+                url: url,
+                statusCode: 204,
+                headers: [
+                    "electric-handle": "h1",
+                    "electric-offset": "0_0",
+                    "electric-cursor": "cursor-1",
+                    "electric-schema": "{}",
+                ]
+            )
+        )
+        await transport.enqueueHTTP(
+            response: httpResponse(
+                url: url,
+                statusCode: 204,
+                headers: [
+                    "electric-handle": "h1",
+                    "electric-offset": "1_0",
+                    "electric-cursor": "cursor-2",
+                    "electric-schema": "{}",
+                ]
+            )
+        )
+
+        let stream = ShapeStream(
+            shape: ElectricShape(url: url, table: "todos"),
+            configuration: .init(subscribe: false),
+            transport: transport,
+            headersProvider: {
+                ["Authorization": await provider.nextValue()]
+            }
+        )
+
+        _ = try #require(await stream.poll())
+        await stream.refresh()
+        _ = try #require(await stream.poll())
+
+        let requests = await transport.requests()
+        #expect(requests.count == 2)
+        #expect(requests[0].value(forHTTPHeaderField: "Authorization") == "token-1")
+        #expect(requests[1].value(forHTTPHeaderField: "Authorization") == "token-2")
+        let callCount = await provider.callCount()
+        #expect(callCount == 2)
+    }
+
     @Test("SSE buffers events until up-to-date and yields a live batch")
     func sseBuffersUntilUpToDate() async throws {
         let transport = TestShapeTransport()
@@ -305,6 +401,77 @@ struct ShapeStreamTests {
         let requestURL = try #require(requests.last?.url)
         let components = try #require(URLComponents(url: requestURL, resolvingAgainstBaseURL: false))
         #expect(components.queryItems?.contains(.init(name: "live_sse", value: "true")) == true)
+    }
+
+    @Test("Dynamic headers are applied to SSE requests")
+    func dynamicHeadersAreAppliedToSSERequests() async throws {
+        let transport = TestShapeTransport()
+        let url = URL(string: "https://example.com/v1/shape")!
+        let schema = #"{"id":{"type":"int8"}}"#
+        let response = httpResponse(
+            url: url,
+            statusCode: 200,
+            headers: [
+                "electric-handle": "h-live",
+                "electric-offset": "2_0",
+                "electric-cursor": "cursor-live",
+                "electric-schema": schema,
+            ]
+        )
+
+        let insert = try jsonData(
+            ElectricMessage(
+                key: "todo:1",
+                value: ["id": .string("1")],
+                headers: .init(operation: .insert)
+            )
+        )
+        let upToDate = try jsonData(ElectricMessage(headers: .init(control: .upToDate, globalLastSeenLSN: "8")))
+
+        await transport.enqueueSSE(
+            response: response,
+            chunks: [
+                Data("data: ".utf8) + insert + Data("\n\n".utf8),
+                Data("data: ".utf8) + upToDate + Data("\n\n".utf8),
+            ]
+        )
+
+        let stream = ShapeStream(
+            shape: ElectricShape(
+                url: url,
+                table: "todos",
+                headers: [
+                    "Authorization": "old-token",
+                    "X-Static": "static",
+                ]
+            ),
+            configuration: .init(
+                subscribe: true,
+                initialState: .init(
+                    handle: "h-live",
+                    offset: "2_0",
+                    cursor: "cursor-live",
+                    isLive: true,
+                    isUpToDate: true,
+                    schema: try JSONDecoder().decode(ElectricSchema.self, from: Data(schema.utf8))
+                )
+            ),
+            transport: transport,
+            headersProvider: {
+                [
+                    "Authorization": "new-token",
+                    "X-Dynamic": "dynamic",
+                ]
+            }
+        )
+
+        _ = try #require(await stream.poll())
+
+        let request = try #require((await transport.requests()).last)
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "new-token")
+        #expect(request.value(forHTTPHeaderField: "X-Static") == "static")
+        #expect(request.value(forHTTPHeaderField: "X-Dynamic") == "dynamic")
+        #expect(request.value(forHTTPHeaderField: "Accept") == "text/event-stream")
     }
 
     @Test("Custom parser is used during SSE batches")
@@ -1940,6 +2107,50 @@ struct ShapeStreamTests {
         #expect(requests.last?.value(forHTTPHeaderField: "Authorization") == "new-token")
     }
 
+    @Test("Headers provider failures go through onError and re-resolve on retry")
+    func headersProviderFailuresCanRetry() async throws {
+        let transport = TestShapeTransport()
+        let provider = ThrowingHeaderProvider()
+        let url = URL(string: "https://example.com/v1/shape")!
+
+        await transport.enqueueHTTP(
+            response: httpResponse(
+                url: url,
+                statusCode: 204,
+                headers: [
+                    "electric-handle": "h1",
+                    "electric-offset": "0_0",
+                    "electric-schema": "{}",
+                ]
+            )
+        )
+
+        let stream = ShapeStream(
+            shape: ElectricShape(url: url, table: "todos"),
+            configuration: .init(
+                subscribe: false,
+                retryPolicy: .init(
+                    backoff: .init(maxRetries: 0)
+                )
+            ),
+            transport: transport,
+            headersProvider: {
+                try await provider.headers()
+            },
+            onError: { _ in
+                .retry
+            }
+        )
+
+        _ = try #require(await stream.poll())
+
+        let attempts = await provider.attemptCount()
+        #expect(attempts == 2)
+        let requests = await transport.requests()
+        #expect(requests.count == 1)
+        #expect(requests.first?.value(forHTTPHeaderField: "Authorization") == "token-2")
+    }
+
     @Test("Missing headers remain terminal and do not auto-retry")
     func missingHeadersRemainTerminal() async throws {
         let transport = TestShapeTransport()
@@ -2073,6 +2284,60 @@ struct ShapeStreamTests {
         #expect(snapshot.messages.first?.value?["id"] == .string("custom-1"))
     }
 
+    @Test("Dynamic headers are applied to fetchSnapshot GET requests")
+    func dynamicHeadersAreAppliedToFetchSnapshotGet() async throws {
+        let transport = TestShapeTransport()
+        let url = URL(string: "https://example.com/v1/shape")!
+        let payload = """
+        {
+          "metadata": {
+            "snapshot_mark": 1,
+            "xmin": "100",
+            "xmax": "200",
+            "xip_list": [],
+            "database_lsn": "123"
+          },
+          "data": []
+        }
+        """
+
+        await transport.enqueueHTTP(
+            response: httpResponse(
+                url: url,
+                statusCode: 200,
+                headers: ["electric-schema": "{}"]
+            ),
+            data: Data(payload.utf8)
+        )
+
+        let stream = ShapeStream(
+            shape: ElectricShape(
+                url: url,
+                table: "todos",
+                headers: [
+                    "Authorization": "old-token",
+                    "X-Static": "static",
+                ]
+            ),
+            configuration: .init(subscribe: false),
+            transport: transport,
+            headersProvider: {
+                [
+                    "Authorization": "new-token",
+                    "X-Dynamic": "dynamic",
+                ]
+            }
+        )
+
+        _ = try await stream.fetchSnapshot(.init(limit: 1))
+
+        let request = try #require((await transport.requests()).last)
+        #expect(request.httpMethod == "GET")
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "new-token")
+        #expect(request.value(forHTTPHeaderField: "X-Static") == "static")
+        #expect(request.value(forHTTPHeaderField: "X-Dynamic") == "dynamic")
+    }
+
     @Test("fetchSnapshot POST sends subset params in request body")
     func fetchSnapshotPostSendsSubsetBody() async throws {
         let transport = TestShapeTransport()
@@ -2202,6 +2467,60 @@ struct ShapeStreamTests {
         #expect(live.messages.contains(where: { $0.key == "todo:1" }) == false)
     }
 
+    @Test("Dynamic headers are applied to requestSnapshot GET requests")
+    func dynamicHeadersAreAppliedToRequestSnapshotGet() async throws {
+        let transport = TestShapeTransport()
+        let url = URL(string: "https://example.com/v1/shape")!
+        let payload = """
+        {
+          "metadata": {
+            "snapshot_mark": 1,
+            "xmin": "100",
+            "xmax": "200",
+            "xip_list": [],
+            "database_lsn": "123"
+          },
+          "data": []
+        }
+        """
+
+        await transport.enqueueHTTP(
+            response: httpResponse(
+                url: url,
+                statusCode: 200,
+                headers: ["electric-schema": "{}"]
+            ),
+            data: Data(payload.utf8)
+        )
+
+        let stream = ShapeStream(
+            shape: ElectricShape(
+                url: url,
+                table: "todos",
+                headers: [
+                    "Authorization": "old-token",
+                    "X-Static": "static",
+                ]
+            ),
+            configuration: .init(subscribe: true),
+            transport: transport,
+            headersProvider: {
+                [
+                    "Authorization": "new-token",
+                    "X-Dynamic": "dynamic",
+                ]
+            }
+        )
+
+        _ = try await stream.requestSnapshot(.init(limit: 1))
+
+        let request = try #require((await transport.requests()).last)
+        #expect(request.httpMethod == "GET")
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "new-token")
+        #expect(request.value(forHTTPHeaderField: "X-Static") == "static")
+        #expect(request.value(forHTTPHeaderField: "X-Dynamic") == "dynamic")
+    }
+
     @Test("Custom parser is used during requestSnapshot")
     func customParserIsUsedDuringRequestSnapshot() async throws {
         let transport = TestShapeTransport()
@@ -2325,6 +2644,61 @@ struct ShapeStreamTests {
 
         let injected = try #require(await stream.poll())
         #expect(injected.messages.contains(where: { $0.headers.control == .snapshotEnd }))
+    }
+
+    @Test("Dynamic headers are applied to requestSnapshot POST requests")
+    func dynamicHeadersAreAppliedToRequestSnapshotPost() async throws {
+        let transport = TestShapeTransport()
+        let url = URL(string: "https://example.com/v1/shape")!
+        let payload = """
+        {
+          "metadata": {
+            "snapshot_mark": 1,
+            "xmin": "100",
+            "xmax": "200",
+            "xip_list": [],
+            "database_lsn": "123"
+          },
+          "data": []
+        }
+        """
+
+        await transport.enqueueHTTP(
+            response: httpResponse(
+                url: url,
+                statusCode: 200,
+                headers: ["electric-schema": "{}"]
+            ),
+            data: Data(payload.utf8)
+        )
+
+        let stream = ShapeStream(
+            shape: ElectricShape(
+                url: url,
+                table: "todos",
+                headers: [
+                    "Authorization": "old-token",
+                    "X-Static": "static",
+                ]
+            ),
+            configuration: .init(subscribe: true),
+            transport: transport,
+            headersProvider: {
+                [
+                    "Authorization": "new-token",
+                    "X-Dynamic": "dynamic",
+                ]
+            }
+        )
+
+        _ = try await stream.requestSnapshot(.init(limit: 1, method: .post))
+
+        let request = try #require((await transport.requests()).last)
+        #expect(request.httpMethod == "POST")
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "new-token")
+        #expect(request.value(forHTTPHeaderField: "X-Static") == "static")
+        #expect(request.value(forHTTPHeaderField: "X-Dynamic") == "dynamic")
+        #expect(request.value(forHTTPHeaderField: "Content-Type") == "application/json")
     }
 
     @Test("Snapshot does not miss live updates committed after the snapshot boundary")
@@ -2756,6 +3130,39 @@ struct ShapeStreamTests {
             #expect(state.offset == testCase.expectedOffset, Comment(rawValue: testCase.name))
         }
     }
+}
+
+private actor HeaderSequenceProvider {
+    private var calls = 0
+
+    func nextValue() -> String {
+        calls += 1
+        return "token-\(calls)"
+    }
+
+    func callCount() -> Int {
+        calls
+    }
+}
+
+private actor ThrowingHeaderProvider {
+    private var attempts = 0
+
+    func headers() throws -> [String: String] {
+        attempts += 1
+        if attempts == 1 {
+            throw TestHeaderProviderError.unavailable
+        }
+        return ["Authorization": "token-\(attempts)"]
+    }
+
+    func attemptCount() -> Int {
+        attempts
+    }
+}
+
+private enum TestHeaderProviderError: Error {
+    case unavailable
 }
 
 @Suite("Materialized Shape", .serialized)

@@ -38,6 +38,7 @@ public actor ShapeStream {
     private let configuration: ShapeStreamConfiguration
     private let transport: any ElectricShapeTransport
     private let parser: ElectricParser
+    private let headersProvider: ShapeStreamHeadersProvider?
     private let debugLogger: ElectricDebugLogger
     private let recoveryPolicy: ShapeStreamRecoveryPolicy
     private let onError: ShapeStreamErrorHandler?
@@ -69,6 +70,7 @@ public actor ShapeStream {
         configuration: ShapeStreamConfiguration = .init(),
         session: URLSession = .shared,
         parser: ElectricParser = .default,
+        headersProvider: ShapeStreamHeadersProvider? = nil,
         debugLogger: ElectricDebugLogger = .disabled,
         onError: ShapeStreamErrorHandler? = nil
     ) {
@@ -77,6 +79,7 @@ public actor ShapeStream {
             configuration: configuration,
             transport: URLSessionElectricShapeTransport(session: session),
             parser: parser,
+            headersProvider: headersProvider,
             debugLogger: debugLogger,
             recoveryPolicy: .live,
             onError: onError
@@ -88,6 +91,7 @@ public actor ShapeStream {
         configuration: ShapeStreamConfiguration = .init(),
         transport: any ElectricShapeTransport,
         parser: ElectricParser = .default,
+        headersProvider: ShapeStreamHeadersProvider? = nil,
         debugLogger: ElectricDebugLogger = .disabled,
         recoveryPolicy: ShapeStreamRecoveryPolicy = .live,
         onError: ShapeStreamErrorHandler? = nil
@@ -96,6 +100,7 @@ public actor ShapeStream {
         self.configuration = configuration
         self.transport = transport
         self.parser = parser
+        self.headersProvider = headersProvider
         self.debugLogger = debugLogger
         self.recoveryPolicy = recoveryPolicy
         self.onError = onError
@@ -363,7 +368,7 @@ public actor ShapeStream {
             return try await pollHTTP(mode: .catchUp, generation: generation)
         }
 
-        let request = ShapeRequestBuilder.makeRequest(
+        let request = try await makeRequest(
             shape: shape,
             state: state,
             timeout: configuration.timeout,
@@ -392,7 +397,7 @@ public actor ShapeStream {
     }
 
     private func pollSSE(generation: Int) async throws -> ElectricShapeBatch? {
-        let request = ShapeRequestBuilder.makeRequest(
+        let request = try await makeRequest(
             shape: shape,
             state: state,
             timeout: configuration.timeout,
@@ -978,7 +983,7 @@ public actor ShapeStream {
         var attempt = 0
 
         while true {
-            let snapshotRequest = try ShapeRequestBuilder.makeSnapshotRequest(
+            let snapshotRequest = try await makeSnapshotRequest(
                 shape: shape,
                 state: state,
                 timeout: configuration.timeout,
@@ -1078,6 +1083,53 @@ public actor ShapeStream {
             shapeKey = ShapeRequestBuilder.canonicalShapeKey(shape: newShape)
             return true
         }
+    }
+
+    private func resolveRequestHeaders() async throws -> [String: String] {
+        var headers = shape.headers
+        if let headersProvider {
+            let dynamicHeaders = try await headersProvider()
+            for (key, value) in dynamicHeaders {
+                headers[key] = value
+            }
+        }
+        return headers
+    }
+
+    private func makeRequest(
+        shape: ElectricShape,
+        state: ShapeStreamState,
+        timeout: TimeInterval,
+        mode: ElectricShapeRequestMode,
+        staleCacheBuster: String? = nil
+    ) async throws -> URLRequest {
+        let headers = try await resolveRequestHeaders()
+        return ShapeRequestBuilder.makeRequest(
+            shape: shape,
+            state: state,
+            timeout: timeout,
+            mode: mode,
+            headers: headers,
+            staleCacheBuster: staleCacheBuster
+        )
+    }
+
+    private func makeSnapshotRequest(
+        shape: ElectricShape,
+        state: ShapeStreamState,
+        timeout: TimeInterval,
+        subset: ShapeSubsetRequest,
+        staleCacheBuster: String? = nil
+    ) async throws -> URLRequest {
+        let headers = try await resolveRequestHeaders()
+        return try ShapeRequestBuilder.makeSnapshotRequest(
+            shape: shape,
+            state: state,
+            timeout: timeout,
+            subset: subset,
+            headers: headers,
+            staleCacheBuster: staleCacheBuster
+        )
     }
 
     private func performHTTPFetchWithRetry(request: URLRequest) async throws -> ElectricShapeHTTPResponse {

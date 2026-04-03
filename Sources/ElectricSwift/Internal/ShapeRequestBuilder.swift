@@ -21,13 +21,14 @@ struct ShapeRequestBuilder {
         state: ShapeStreamState,
         timeout: TimeInterval,
         mode: ElectricShapeRequestMode,
+        headers: [String: String] = [:],
         staleCacheBuster: String? = nil
     ) -> URLRequest {
         var request = URLRequest(url: makeURL(shape: shape, state: state, mode: mode, staleCacheBuster: staleCacheBuster))
         request.httpMethod = "GET"
         request.timeoutInterval = timeout
         request.cachePolicy = .reloadIgnoringLocalCacheData
-        for (header, value) in shape.headers {
+        for (header, value) in headers {
             request.setValue(value, forHTTPHeaderField: header)
         }
         if mode == .liveSSE {
@@ -41,6 +42,7 @@ struct ShapeRequestBuilder {
         state: ShapeStreamState,
         timeout: TimeInterval,
         subset: ShapeSubsetRequest,
+        headers: [String: String] = [:],
         staleCacheBuster: String? = nil
     ) throws -> URLRequest {
         switch subset.method {
@@ -59,7 +61,7 @@ struct ShapeRequestBuilder {
             request.httpMethod = SnapshotMethod.get.rawValue
             request.timeoutInterval = timeout
             request.cachePolicy = .reloadIgnoringLocalCacheData
-            for (header, value) in shape.headers {
+            for (header, value) in headers {
                 request.setValue(value, forHTTPHeaderField: header)
             }
             return request
@@ -78,7 +80,7 @@ struct ShapeRequestBuilder {
             request.httpMethod = SnapshotMethod.post.rawValue
             request.timeoutInterval = timeout
             request.cachePolicy = .reloadIgnoringLocalCacheData
-            for (header, value) in shape.headers {
+            for (header, value) in headers {
                 request.setValue(value, forHTTPHeaderField: header)
             }
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")

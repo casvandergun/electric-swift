@@ -122,6 +122,9 @@ public enum ShapeStreamErrorDecision: Sendable {
 public typealias ShapeStreamErrorHandler =
     @Sendable (ShapeStreamErrorContext) async -> ShapeStreamErrorDecision
 
+public typealias ShapeStreamHeadersProvider =
+    @Sendable () async throws -> [String: String]
+
 public enum SnapshotMethod: String, Sendable, Hashable, Codable {
     case get = "GET"
     case post = "POST"

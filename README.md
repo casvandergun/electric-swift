@@ -148,6 +148,19 @@ let shape = ElectricShape(
 )
 ```
 
+### Dynamic headers
+
+```swift
+let stream = ShapeStream(
+    shape: shape,
+    headersProvider: {
+        ["Authorization": "Bearer \(await tokenStore.currentToken())"]
+    }
+)
+```
+
+`headersProvider` is resolved for every outgoing poll, SSE connect, and snapshot request. Static `shape.headers` remain the baseline, and dynamic headers override static ones when they share the same key.
+
 ### Retry policy and `onError`
 
 ```swift
