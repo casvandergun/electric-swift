@@ -2,7 +2,7 @@
 import Foundation
 import Testing
 
-@Suite("Electric Message Decoding")
+@Suite("Electric Message Decoding", .serialized)
 struct ElectricMessageDecoderTests {
     @Test("Coerces common postgres scalar types using the schema header")
     func coercesCommonTypes() throws {

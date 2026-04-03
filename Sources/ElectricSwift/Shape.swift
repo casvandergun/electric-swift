@@ -53,6 +53,7 @@ public actor Shape<Model: Decodable & Sendable> {
 
     deinit {
         consumerTask?.cancel()
+        guard isStopped == false else { return }
         let stream = stream
         Task {
             await stream.stop()
@@ -69,6 +70,7 @@ public actor Shape<Model: Decodable & Sendable> {
         consumerTask = nil
         await stream.stop()
         task?.cancel()
+        await task?.value
         finishUpdates()
         failReadyWaiters(with: ShapeError.stopped)
     }
@@ -172,7 +174,15 @@ public actor Shape<Model: Decodable & Sendable> {
         do {
             for try await batch in await stream.batches() {
                 await materialized.apply(batch)
-                status = batch.boundaryKind == .mustRefetch ? .syncing : .upToDate
+                switch batch.boundaryKind {
+                case .mustRefetch:
+                    status = .syncing
+                case .upToDate:
+                    status = .upToDate
+                case .liveUpdate:
+                    let streamState = await stream.currentState()
+                    status = streamState.isUpToDate ? .upToDate : .syncing
+                }
 
                 let value = try await materialized.values()
                 let change = ShapeChange(

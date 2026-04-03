@@ -74,7 +74,7 @@ import ElectricSwift
 import Foundation
 
 struct Todo: Codable, Sendable {
-    let id: Int
+    let id: UUID
     let title: String
     let completed: Bool?
 }

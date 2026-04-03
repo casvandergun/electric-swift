@@ -1,7 +1,7 @@
 @testable import ElectricSwift
 import Testing
 
-@Suite("Snapshot Tracker")
+@Suite("Snapshot Tracker", .serialized)
 struct SnapshotTrackerTests {
     @Test("Rejects change already visible in snapshot")
     func rejectsVisibleMessage() {

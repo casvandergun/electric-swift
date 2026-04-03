@@ -2,7 +2,7 @@
 import Foundation
 import Testing
 
-@Suite("Trackers")
+@Suite("Trackers", .serialized)
 struct TrackersTests {
     @Test("Expired shapes cache returns marked handle")
     func expiredShapesCacheTracksHandles() {

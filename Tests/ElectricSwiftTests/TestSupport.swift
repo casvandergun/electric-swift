@@ -291,3 +291,71 @@ final class TestDebugRecorder: @unchecked Sendable {
         lock.unlock()
     }
 }
+
+struct TestTimeoutError: Error, CustomStringConvertible, Sendable {
+    let operation: String
+    let timeoutSeconds: Double
+
+    var description: String {
+        "Timed out after \(timeoutSeconds)s while \(operation)"
+    }
+}
+
+func testLog(_ message: @autoclosure () -> String) {
+    print("[ElectricSwiftTests] \(message())")
+}
+
+func withTestTimeout<T: Sendable>(
+    operation: String,
+    timeoutSeconds: Double = 10,
+    _ work: @escaping @Sendable () async throws -> T
+) async throws -> T {
+    let timeoutNanoseconds = UInt64(timeoutSeconds * 1_000_000_000)
+
+    return try await withThrowingTaskGroup(of: T.self) { group in
+        group.addTask {
+            try await work()
+        }
+
+        group.addTask {
+            try await Task.sleep(nanoseconds: timeoutNanoseconds)
+            testLog("timeout after \(timeoutSeconds)s while \(operation)")
+            throw TestTimeoutError(operation: operation, timeoutSeconds: timeoutSeconds)
+        }
+
+        let result = try await group.next()
+        group.cancelAll()
+        return try #require(result)
+    }
+}
+
+func loggedPoll(
+    _ stream: ShapeStream,
+    label: String,
+    timeoutSeconds: Double = 10
+) async throws -> ElectricShapeBatch? {
+    let before = await stream.currentState()
+    testLog(
+        "poll start [\(label)] phase=\(String(describing: before.phase)) handle=\(before.handle ?? "nil") offset=\(before.offset) upToDate=\(before.isUpToDate)"
+    )
+
+    do {
+        let batch = try await withTestTimeout(
+            operation: "poll \(label)",
+            timeoutSeconds: timeoutSeconds
+        ) {
+            try await stream.poll()
+        }
+        let after = await stream.currentState()
+        testLog(
+            "poll end [\(label)] phase=\(String(describing: after.phase)) handle=\(after.handle ?? "nil") offset=\(after.offset) upToDate=\(after.isUpToDate) messages=\(batch?.messages.count ?? 0)"
+        )
+        return batch
+    } catch {
+        let after = await stream.currentState()
+        testLog(
+            "poll failed [\(label)] error=\(error) phase=\(String(describing: after.phase)) handle=\(after.handle ?? "nil") offset=\(after.offset) upToDate=\(after.isUpToDate)"
+        )
+        throw error
+    }
+}

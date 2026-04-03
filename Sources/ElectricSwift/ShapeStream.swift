@@ -103,6 +103,10 @@ public actor ShapeStream {
         self.state = initialState
     }
 
+    deinit {
+        currentPollTask?.cancel()
+    }
+
     public func stop() {
         isStopped = true
         pauseReasons.removeAll(keepingCapacity: false)
@@ -131,6 +135,7 @@ public actor ShapeStream {
         guard isStopped == false else { return }
         guard pauseReasons.isEmpty else { return }
 
+        let shouldCancelCurrentPoll = currentPollTask != nil
         forceCatchUpBoundary = true
         clearTransientRequestState()
         pendingInjectedBatches.removeAll(keepingCapacity: true)
@@ -143,7 +148,7 @@ public actor ShapeStream {
             state.phase = .syncing
         }
 
-        if state.isUpToDate {
+        if shouldCancelCurrentPoll {
             currentPollTask?.cancel()
         }
 
@@ -202,7 +207,7 @@ public actor ShapeStream {
                 checkpoint: state.checkpoint,
                 schema: state.schema,
                 phase: state.phase,
-                boundaryKind: state.isUpToDate ? .liveUpdate : .upToDate
+                boundaryKind: .liveUpdate
             )
             pendingInjectedBatches.append(batch)
             releasePause(reason: Self.snapshotPauseReason)
@@ -939,9 +944,11 @@ public actor ShapeStream {
         guard pauseReasons.remove(reason) != nil else { return }
         guard pauseReasons.isEmpty else { return }
 
-        forceCatchUpBoundary = true
+        if configuration.subscribe {
+            forceCatchUpBoundary = true
+            state.isUpToDate = false
+        }
         resetFastLoopState()
-        state.isUpToDate = false
         if state.phase == .paused {
             state.phase = .syncing
         }

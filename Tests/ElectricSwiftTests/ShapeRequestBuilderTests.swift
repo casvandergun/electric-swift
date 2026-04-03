@@ -1,7 +1,7 @@
 @testable import ElectricSwift
 import Testing
 
-@Suite("Shape Request Builder")
+@Suite("Shape Request Builder", .serialized)
 struct ShapeRequestBuilderTests {
     @Test("Builds Electric protocol URL parameters")
     func buildsURLParameters() throws {

@@ -8,6 +8,7 @@ struct ShapeStreamTests {
     func noContentMarksUpToDate() async throws {
         MockURLProtocol.reset()
         let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
         let url = URL(string: "https://example.com/v1/shape")!
 
         MockURLProtocol.enqueue(
@@ -42,6 +43,7 @@ struct ShapeStreamTests {
     func buffersUntilUpToDate() async throws {
         MockURLProtocol.reset()
         let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
         let url = URL(string: "https://example.com/v1/shape")!
 
         MockURLProtocol.enqueue(
@@ -102,6 +104,7 @@ struct ShapeStreamTests {
     func conflictResetsState() async throws {
         MockURLProtocol.reset()
         let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
         let url = URL(string: "https://example.com/v1/shape")!
 
         MockURLProtocol.enqueue(
@@ -133,6 +136,7 @@ struct ShapeStreamTests {
     func invalidStatusThrows() async throws {
         MockURLProtocol.reset()
         let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
         let url = URL(string: "https://example.com/v1/shape")!
 
         MockURLProtocol.enqueue(
@@ -156,6 +160,7 @@ struct ShapeStreamTests {
     func parsesArrayValues() async throws {
         MockURLProtocol.reset()
         let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
         let url = URL(string: "https://example.com/v1/shape")!
 
         MockURLProtocol.enqueue(
@@ -932,6 +937,7 @@ struct ShapeStreamTests {
     func emitsReadTraceEvents() async throws {
         MockURLProtocol.reset()
         let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
         let recorder = TestDebugRecorder()
         let url = URL(string: "https://example.com/v1/shape")!
 
@@ -1182,6 +1188,7 @@ struct ShapeStreamTests {
     func incompleteBatchDoesNotSetLastSyncedAt() async throws {
         MockURLProtocol.reset()
         let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
         let url = URL(string: "https://example.com/v1/shape")!
 
         MockURLProtocol.enqueue(
@@ -1219,6 +1226,7 @@ struct ShapeStreamTests {
     func noContentSetsLastSyncedAt() async throws {
         MockURLProtocol.reset()
         let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
         let url = URL(string: "https://example.com/v1/shape")!
 
         MockURLProtocol.enqueue(
@@ -1248,6 +1256,7 @@ struct ShapeStreamTests {
     func nonSSEUpToDatePreservesResponseOffset() async throws {
         MockURLProtocol.reset()
         let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
         let url = URL(string: "https://example.com/v1/shape")!
 
         MockURLProtocol.enqueue(
@@ -1530,6 +1539,7 @@ struct ShapeStreamTests {
     func schemaIsFirstWriteWins() async throws {
         MockURLProtocol.reset()
         let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
         let url = URL(string: "https://example.com/v1/shape")!
 
         MockURLProtocol.enqueue(

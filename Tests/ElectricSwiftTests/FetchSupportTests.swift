@@ -2,7 +2,7 @@
 import Foundation
 import Testing
 
-@Suite("Fetch Support")
+@Suite("Fetch Support", .serialized)
 struct FetchSupportTests {
     @Test("Retry-After parser supports seconds")
     func parsesRetryAfterSeconds() {

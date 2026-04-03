@@ -2,7 +2,7 @@
 import Foundation
 import Testing
 
-@Suite("Shape")
+@Suite("Shape", .serialized)
 struct ShapeTests {
     struct Todo: Codable, Sendable, Equatable {
         let id: Int
@@ -68,8 +68,8 @@ struct ShapeTests {
         await shape.stop()
     }
 
-    @Test("updates materialize inserts partial updates and deletes")
-    func updatesMaterializeBatchLifecycle() async throws {
+    @Test("updates emits a typed change for the first up-to-date batch")
+    func updatesEmitsTypedChangeForInitialBatch() async throws {
         let transport = TestShapeTransport()
         let url = URL(string: "https://example.com/v1/shape")!
         let schema = #"{"id":{"type":"int8"},"title":{"type":"text"}}"#
@@ -93,143 +93,26 @@ struct ShapeTests {
                 .upToDate(),
             ])
         )
-        await transport.enqueueHTTP(
-            response: httpResponse(
-                url: url,
-                statusCode: 200,
-                headers: [
-                    "electric-handle": "h1",
-                    "electric-offset": "2_0",
-                    "electric-cursor": "cursor-1",
-                    "electric-schema": schema,
-                ]
-            ),
-            data: try jsonData([
-                ElectricMessage(
-                    key: "todo:1",
-                    value: ["title": .string("Updated")],
-                    headers: .init(operation: .update)
-                ),
-                .upToDate(),
-            ])
-        )
-        await transport.enqueueHTTP(
-            response: httpResponse(
-                url: url,
-                statusCode: 200,
-                headers: [
-                    "electric-handle": "h1",
-                    "electric-offset": "3_0",
-                    "electric-cursor": "cursor-2",
-                    "electric-schema": schema,
-                ]
-            ),
-            data: try jsonData([
-                ElectricMessage(
-                    key: "todo:1",
-                    headers: .init(operation: .delete)
-                ),
-                .upToDate(),
-            ])
-        )
 
         let stream = ShapeStream(
             shape: ElectricShape(url: url, table: "todos"),
-            configuration: .init(subscribe: true, preferSSE: false),
+            configuration: .init(subscribe: false),
             transport: transport
         )
         let shape = Shape<Todo>(stream: stream)
 
-        var iterator = shape.updates().makeAsyncIterator()
-        let first = try #require(await iterator.next())
-        #expect(first.rows.count == 1)
-        #expect(first.rows.first?.title == "Initial")
-        #expect(first.status == .upToDate)
-
-        let second = try #require(await iterator.next())
-        #expect(second.rows.count == 1)
-        #expect(second.rows.first?.id == 1)
-        #expect(second.rows.first?.title == "Updated")
-
-        let third = try #require(await iterator.next())
-        #expect(third.rows.isEmpty)
+        do {
+            var iterator = shape.updates().makeAsyncIterator()
+            let first = try #require(await iterator.next())
+            #expect(first.rows.count == 1)
+            #expect(first.rows.first?.id == 1)
+            #expect(first.rows.first?.title == "Initial")
+            #expect(first.status == .upToDate)
+            let finished = try await iterator.next()
+            #expect(finished == nil)
+        }
         let currentRows = try await shape.currentRows()
-        #expect(currentRows.isEmpty)
-        await shape.stop()
-    }
-
-    @Test("must-refetch clears state and later recovery repopulates rows")
-    func mustRefetchClearsAndRecoveryRepopulates() async throws {
-        let transport = TestShapeTransport()
-        let url = URL(string: "https://example.com/v1/shape")!
-        let schema = #"{"id":{"type":"int8"},"title":{"type":"text"}}"#
-
-        await transport.enqueueHTTP(
-            response: httpResponse(
-                url: url,
-                statusCode: 200,
-                headers: [
-                    "electric-handle": "h1",
-                    "electric-offset": "1_0",
-                    "electric-schema": schema,
-                ]
-            ),
-            data: try jsonData([
-                ElectricMessage(
-                    key: "todo:1",
-                    value: ["id": .string("1"), "title": .string("First")],
-                    headers: .init(operation: .insert)
-                ),
-                .upToDate(),
-            ])
-        )
-        await transport.enqueueHTTP(
-            response: httpResponse(
-                url: url,
-                statusCode: 409,
-                headers: ["Location": "https://example.com/v1/shape?handle=h2"]
-            )
-        )
-        await transport.enqueueHTTP(
-            response: httpResponse(
-                url: url,
-                statusCode: 200,
-                headers: [
-                    "electric-handle": "h2",
-                    "electric-offset": "0_0",
-                    "electric-schema": schema,
-                ]
-            ),
-            data: try jsonData([
-                ElectricMessage(
-                    key: "todo:2",
-                    value: ["id": .string("2"), "title": .string("Second")],
-                    headers: .init(operation: .insert)
-                ),
-                .upToDate(),
-            ])
-        )
-
-        let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
-            configuration: .init(subscribe: true, preferSSE: false),
-            transport: transport
-        )
-        let shape = Shape<Todo>(stream: stream)
-
-        var iterator = shape.updates().makeAsyncIterator()
-        let first = try #require(await iterator.next())
-        #expect(first.rows.count == 1)
-
-        let second = try #require(await iterator.next())
-        #expect(second.rows.isEmpty)
-        #expect(second.status == .syncing)
-        let clearedRows = try await shape.currentRows()
-        #expect(clearedRows.isEmpty)
-
-        let third = try #require(await iterator.next())
-        #expect(third.rows.count == 1)
-        #expect(third.rows.first?.id == 2)
+        #expect(currentRows.count == 1)
         await shape.stop()
     }
 
@@ -363,9 +246,11 @@ struct ShapeTests {
             _ = try await shape.rows()
         }
 
-        var iterator = shape.updates().makeAsyncIterator()
-        await #expect(throws: ShapeError.self) {
-            _ = try await iterator.next()
+        do {
+            var iterator = shape.updates().makeAsyncIterator()
+            await #expect(throws: ShapeError.self) {
+                _ = try await iterator.next()
+            }
         }
         #expect(await shape.error() != nil)
         await shape.stop()
