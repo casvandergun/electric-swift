@@ -4,6 +4,8 @@
 
 ## User settings
 xcuserdata/
+.DS_Store
+**/.DS_Store
 
 ## Obj-C/Swift specific
 *.hmap
@@ -29,7 +31,11 @@ playground.xcworkspace
 # hence it is not needed unless you have added a package configuration file to your project
 # .swiftpm
 
+.swiftpm/
 .build/
+
+# Local/generated reference client
+typescript-client/
 
 # CocoaPods
 #
@@ -60,7 +66,3 @@ fastlane/report.xml
 fastlane/Preview.html
 fastlane/screenshots/**/*.png
 fastlane/test_output
-
-
-.DS_Store
-
