@@ -22,10 +22,11 @@ struct ShapeRequestBuilder {
         timeout: TimeInterval,
         mode: ElectricShapeRequestMode,
         headers: [String: String] = [:],
+        params: [String: ShapeRequestParam]? = nil,
         staleCacheBuster: String? = nil,
         columnMapper: ColumnMapper? = nil
     ) -> URLRequest {
-        var request = URLRequest(url: makeURL(options: options, state: state, mode: mode, staleCacheBuster: staleCacheBuster, columnMapper: columnMapper))
+        var request = URLRequest(url: makeURL(options: options, state: state, mode: mode, params: params, staleCacheBuster: staleCacheBuster, columnMapper: columnMapper))
         request.httpMethod = "GET"
         request.timeoutInterval = timeout
         request.cachePolicy = .reloadIgnoringLocalCacheData
@@ -44,6 +45,7 @@ struct ShapeRequestBuilder {
         timeout: TimeInterval,
         subset: ShapeSubsetRequest,
         headers: [String: String] = [:],
+        params: [String: ShapeRequestParam]? = nil,
         staleCacheBuster: String? = nil,
         columnMapper: ColumnMapper? = nil
     ) throws -> URLRequest {
@@ -54,6 +56,7 @@ struct ShapeRequestBuilder {
                     options: options,
                     state: state,
                     mode: .catchUp,
+                    params: params,
                     staleCacheBuster: staleCacheBuster,
                     subset: subset,
                     includeCursor: false,
@@ -74,6 +77,7 @@ struct ShapeRequestBuilder {
                     options: options,
                     state: state,
                     mode: .catchUp,
+                    params: params,
                     staleCacheBuster: staleCacheBuster,
                     subset: nil,
                     includeCursor: false,
@@ -97,6 +101,7 @@ struct ShapeRequestBuilder {
         options: ShapeStreamOptions,
         state: ShapeStreamState,
         mode: ElectricShapeRequestMode = .catchUp,
+        params: [String: ShapeRequestParam]? = nil,
         staleCacheBuster: String? = nil,
         subset: ShapeSubsetRequest? = nil,
         includeCursor: Bool = true,
@@ -106,12 +111,13 @@ struct ShapeRequestBuilder {
         var components = URLComponents(url: options.url, resolvingAgainstBaseURL: false)
             ?? URLComponents()
         var queryItems = components.queryItems ?? []
-        let shapeKey = canonicalShapeKey(options: options, columnMapper: columnMapper)
+        let requestParams = params ?? options.params
+        let shapeKey = canonicalShapeKey(options: options, params: requestParams, columnMapper: columnMapper)
 
         set(&queryItems, name: "table", value: options.table)
         set(&queryItems, name: "offset", value: state.offset)
         set(&queryItems, name: "where", value: ColumnMappingSupport.encodeWhereClause(options.whereClause, using: columnMapper))
-        setWhereParams(&queryItems, params: options.params)
+        setWhereParams(&queryItems, params: options.whereParams)
         set(&queryItems, name: "replica", value: options.replica.rawValue)
         set(&queryItems, name: "log", value: options.log.rawValue)
         set(&queryItems, name: "columns", value: serializedColumns(options.columns, columnMapper: columnMapper))
@@ -123,8 +129,8 @@ struct ShapeRequestBuilder {
         set(&queryItems, name: "expired_handle", value: ElectricCaches.expiredShapes.getExpiredHandle(for: shapeKey))
         set(&queryItems, name: "cache-buster", value: staleCacheBuster)
 
-        for (key, value) in options.extraParameters {
-            set(&queryItems, name: key, value: value)
+        for key in requestParams.keys.sorted() {
+            setRequestParam(&queryItems, name: key, value: requestParams[key])
         }
         if let subset {
             applySubset(subset, to: &queryItems, columnMapper: columnMapper)
@@ -134,18 +140,23 @@ struct ShapeRequestBuilder {
         return components.url ?? options.url
     }
 
-    static func canonicalShapeKey(options: ShapeStreamOptions, columnMapper: ColumnMapper? = nil) -> String {
+    static func canonicalShapeKey(
+        options: ShapeStreamOptions,
+        params: [String: ShapeRequestParam]? = nil,
+        columnMapper: ColumnMapper? = nil
+    ) -> String {
         var components = URLComponents(url: options.url, resolvingAgainstBaseURL: false)
             ?? URLComponents()
         var queryItems: [URLQueryItem] = []
         set(&queryItems, name: "table", value: options.table)
         set(&queryItems, name: "where", value: ColumnMappingSupport.encodeWhereClause(options.whereClause, using: columnMapper))
-        setWhereParams(&queryItems, params: options.params)
+        setWhereParams(&queryItems, params: options.whereParams)
         set(&queryItems, name: "replica", value: options.replica.rawValue)
         set(&queryItems, name: "log", value: options.log.rawValue)
         set(&queryItems, name: "columns", value: serializedColumns(options.columns, columnMapper: columnMapper))
-        for key in options.extraParameters.keys.sorted() {
-            set(&queryItems, name: key, value: options.extraParameters[key])
+        let requestParams = params ?? options.params
+        for key in requestParams.keys.sorted() {
+            setRequestParam(&queryItems, name: key, value: requestParams[key])
         }
         components.queryItems = queryItems
         return components.url?.absoluteString ?? options.url.absoluteString
@@ -177,6 +188,24 @@ struct ShapeRequestBuilder {
         }
         for key in params.keys.sorted() {
             items.append(URLQueryItem(name: "params[\(key)]", value: params[key]))
+        }
+    }
+
+    private static func setRequestParam(_ items: inout [URLQueryItem], name: String, value: ShapeRequestParam?) {
+        switch value {
+        case .string(let value):
+            set(&items, name: name, value: value)
+        case .strings(let values):
+            set(&items, name: name, value: values.joined(separator: ","))
+        case .object(let values):
+            for key in values.keys {
+                items.removeAll { $0.name == "\(name)[\(key)]" }
+            }
+            for key in values.keys.sorted() {
+                items.append(URLQueryItem(name: "\(name)[\(key)]", value: values[key]))
+            }
+        case nil:
+            set(&items, name: name, value: nil)
         }
     }
 

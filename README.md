@@ -102,7 +102,7 @@ for try await change in shape.updates() {
 
 ### `ShapeStreamOptions`
 
-`ShapeStreamOptions` describes the stream you want to open: the Electric endpoint URL, table, optional column selection, optional `whereClause`, positional `params`, `replica`, `log`, extra query parameters, and request headers.
+`ShapeStreamOptions` describes the stream you want to open: the Electric endpoint URL, table, optional column selection, optional `whereClause`, positional `whereParams`, `replica`, `log`, additional query `params`, and request headers.
 
 ### `ShapeStream`
 
@@ -145,25 +145,28 @@ let options = ShapeStreamOptions(
     url: URL(string: "https://example.com/v1/shape")!,
     table: "todos",
     whereClause: "tenant_id = $1",
-    params: ["1": "acme"],
+    whereParams: ["1": "acme"],
+    params: ["source_id": "ios-client"],
     log: .full,
-    extraParameters: ["source_id": "ios-client"],
     headers: ["Authorization": "Bearer <token>"]
 )
 ```
 
-### Dynamic headers
+### Dynamic headers and params
 
 ```swift
 let stream = ShapeStream(
     options: options,
-    headersProvider: {
+    dynamicHeaders: {
         ["Authorization": "Bearer \(await tokenStore.currentToken())"]
+    },
+    dynamicParams: {
+        ["source_id": await sourceStore.currentSourceID()]
     }
 )
 ```
 
-`headersProvider` is resolved for every outgoing poll, SSE connect, and snapshot request. Static `options.headers` remain the baseline, and dynamic headers override static ones when they share the same key.
+`dynamicHeaders` and `dynamicParams` are resolved for every outgoing poll, SSE connect, and snapshot request. Static `options.headers` and `options.params` remain the baseline, and dynamic values override static values when they share the same key.
 
 ### Column mapping and transformation
 

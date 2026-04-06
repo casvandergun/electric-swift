@@ -10,9 +10,9 @@ struct ShapeRequestBuilderTests {
             table: "issues",
             columns: ["id", "title"],
             whereClause: "priority = 'high'",
-            params: ["1": "high"],
-            replica: .full,
-            extraParameters: ["source_id": "ios-client"]
+            whereParams: ["1": "high"],
+            params: ["source_id": .string("ios-client")],
+            replica: .full
         )
         let state = ShapeStreamState(
             handle: "shape-1",
@@ -44,7 +44,7 @@ struct ShapeRequestBuilderTests {
             table: "issues",
             columns: ["userId", "createdAt"],
             whereClause: "userId = $1 AND status = 'open'",
-            params: ["1": "42"],
+            whereParams: ["1": "42"],
             log: .changesOnly
         )
         let state = ShapeStreamState(offset: "-1", isLive: false, isUpToDate: false)

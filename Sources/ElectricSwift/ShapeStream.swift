@@ -43,7 +43,8 @@ public actor ShapeStream {
     private let parser: ElectricParser
     private let columnMapper: ColumnMapper?
     private let transformer: ElectricRowTransform?
-    private let headersProvider: ShapeStreamHeadersProvider?
+    private let dynamicHeaders: ShapeStreamDynamicHeaders?
+    private let dynamicParams: ShapeStreamDynamicParams?
     private let debugLogger: ElectricDebugLogger
     private let recoveryPolicy: ShapeStreamRecoveryPolicy
     private let onError: ShapeStreamErrorHandler?
@@ -77,7 +78,8 @@ public actor ShapeStream {
         parser: ElectricParser = .default,
         columnMapper: ColumnMapper? = nil,
         transformer: ElectricRowTransform? = nil,
-        headersProvider: ShapeStreamHeadersProvider? = nil,
+        dynamicHeaders: ShapeStreamDynamicHeaders? = nil,
+        dynamicParams: ShapeStreamDynamicParams? = nil,
         debugLogger: ElectricDebugLogger = .disabled,
         onError: ShapeStreamErrorHandler? = nil
     ) {
@@ -88,7 +90,8 @@ public actor ShapeStream {
             parser: parser,
             columnMapper: columnMapper,
             transformer: transformer,
-            headersProvider: headersProvider,
+            dynamicHeaders: dynamicHeaders,
+            dynamicParams: dynamicParams,
             debugLogger: debugLogger,
             recoveryPolicy: .live,
             onError: onError
@@ -102,7 +105,8 @@ public actor ShapeStream {
         parser: ElectricParser = .default,
         columnMapper: ColumnMapper? = nil,
         transformer: ElectricRowTransform? = nil,
-        headersProvider: ShapeStreamHeadersProvider? = nil,
+        dynamicHeaders: ShapeStreamDynamicHeaders? = nil,
+        dynamicParams: ShapeStreamDynamicParams? = nil,
         debugLogger: ElectricDebugLogger = .disabled,
         recoveryPolicy: ShapeStreamRecoveryPolicy = .live,
         onError: ShapeStreamErrorHandler? = nil
@@ -113,7 +117,8 @@ public actor ShapeStream {
         self.parser = parser
         self.columnMapper = columnMapper
         self.transformer = transformer
-        self.headersProvider = headersProvider
+        self.dynamicHeaders = dynamicHeaders
+        self.dynamicParams = dynamicParams
         self.debugLogger = debugLogger
         self.recoveryPolicy = recoveryPolicy
         self.onError = onError
@@ -329,8 +334,6 @@ public actor ShapeStream {
             if isStopped || Task.isCancelled {
                 return nil
             }
-
-            enterReplayIfNeeded()
 
             let mode = currentRequestMode()
             let generation = requestGeneration
@@ -1113,13 +1116,24 @@ public actor ShapeStream {
 
     private func resolveRequestHeaders() async throws -> [String: String] {
         var headers = options.headers
-        if let headersProvider {
-            let dynamicHeaders = try await headersProvider()
-            for (key, value) in dynamicHeaders {
+        if let dynamicHeaders {
+            let resolvedHeaders = try await dynamicHeaders()
+            for (key, value) in resolvedHeaders {
                 headers[key] = value
             }
         }
         return headers
+    }
+
+    private func resolveRequestParams() async throws -> [String: ShapeRequestParam] {
+        var params = options.params
+        if let dynamicParams {
+            let resolvedParams = try await dynamicParams()
+            for (key, value) in resolvedParams {
+                params[key] = value
+            }
+        }
+        return params
     }
 
     private func makeRequest(
@@ -1128,13 +1142,18 @@ public actor ShapeStream {
         mode: ElectricShapeRequestMode,
         staleCacheBuster: String? = nil
     ) async throws -> URLRequest {
-        let headers = try await resolveRequestHeaders()
+        async let resolvedHeaders = resolveRequestHeaders()
+        async let resolvedParams = resolveRequestParams()
+        let (headers, params) = try await (resolvedHeaders, resolvedParams)
+        shapeKey = ShapeRequestBuilder.canonicalShapeKey(options: options, params: params, columnMapper: columnMapper)
+        enterReplayIfNeeded()
         return ShapeRequestBuilder.makeRequest(
             options: options,
             state: state,
             timeout: timeout,
             mode: mode,
             headers: headers,
+            params: params,
             staleCacheBuster: staleCacheBuster,
             columnMapper: columnMapper
         )
@@ -1146,13 +1165,17 @@ public actor ShapeStream {
         subset: ShapeSubsetRequest,
         staleCacheBuster: String? = nil
     ) async throws -> URLRequest {
-        let headers = try await resolveRequestHeaders()
+        async let resolvedHeaders = resolveRequestHeaders()
+        async let resolvedParams = resolveRequestParams()
+        let (headers, params) = try await (resolvedHeaders, resolvedParams)
+        shapeKey = ShapeRequestBuilder.canonicalShapeKey(options: options, params: params, columnMapper: columnMapper)
         return try ShapeRequestBuilder.makeSnapshotRequest(
             options: options,
             state: state,
             timeout: timeout,
             subset: subset,
             headers: headers,
+            params: params,
             staleCacheBuster: staleCacheBuster,
             columnMapper: columnMapper
         )

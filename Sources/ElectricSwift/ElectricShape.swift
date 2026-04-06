@@ -10,17 +10,29 @@ public enum ShapeLogMode: String, Sendable, Codable, Hashable {
     case full
 }
 
+public enum ShapeRequestParam: Sendable, Hashable, Codable {
+    case string(String)
+    case strings([String])
+    case object([String: String])
+}
+
+extension ShapeRequestParam: ExpressibleByStringLiteral {
+    public init(stringLiteral value: String) {
+        self = .string(value)
+    }
+}
+
 public struct ShapeStreamOptions: Sendable, Hashable, Codable {
     public var url: URL
     public var table: String?
     public var columns: [String]
     public var whereClause: String?
-    public var params: [String: String]
+    public var whereParams: [String: String]
+    public var params: [String: ShapeRequestParam]
     public var replica: ElectricReplica
     public var log: ShapeLogMode
     public var offset: String?
     public var handle: String?
-    public var extraParameters: [String: String]
     public var headers: [String: String]
 
     public init(
@@ -28,24 +40,24 @@ public struct ShapeStreamOptions: Sendable, Hashable, Codable {
         table: String? = nil,
         columns: [String] = [],
         whereClause: String? = nil,
-        params: [String: String] = [:],
+        whereParams: [String: String] = [:],
+        params: [String: ShapeRequestParam] = [:],
         replica: ElectricReplica = .default,
         log: ShapeLogMode = .full,
         offset: String? = nil,
         handle: String? = nil,
-        extraParameters: [String: String] = [:],
         headers: [String: String] = [:]
     ) {
         self.url = url
         self.table = table
         self.columns = columns
         self.whereClause = whereClause
+        self.whereParams = whereParams
         self.params = params
         self.replica = replica
         self.log = log
         self.offset = offset
         self.handle = handle
-        self.extraParameters = extraParameters
         self.headers = headers
     }
 }
@@ -139,8 +151,11 @@ public enum ShapeStreamErrorDecision: Sendable {
 public typealias ShapeStreamErrorHandler =
     @Sendable (ShapeStreamErrorContext) async -> ShapeStreamErrorDecision
 
-public typealias ShapeStreamHeadersProvider =
+public typealias ShapeStreamDynamicHeaders =
     @Sendable () async throws -> [String: String]
+
+public typealias ShapeStreamDynamicParams =
+    @Sendable () async throws -> [String: ShapeRequestParam]
 
 public enum SnapshotMethod: String, Sendable, Hashable, Codable {
     case get = "GET"

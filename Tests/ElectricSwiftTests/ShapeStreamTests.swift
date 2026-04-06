@@ -272,7 +272,7 @@ struct ShapeStreamTests {
             ),
             configuration: .init(subscribe: false),
             transport: transport,
-            headersProvider: {
+            dynamicHeaders: {
                 [
                     "Authorization": "new-token",
                     "X-Dynamic": "dynamic",
@@ -286,6 +286,57 @@ struct ShapeStreamTests {
         #expect(request.value(forHTTPHeaderField: "Authorization") == "new-token")
         #expect(request.value(forHTTPHeaderField: "X-Static") == "static")
         #expect(request.value(forHTTPHeaderField: "X-Dynamic") == "dynamic")
+    }
+
+    @Test("Dynamic params are applied to polling requests and override static params")
+    func dynamicParamsAreAppliedToPollingRequests() async throws {
+        let transport = TestShapeTransport()
+        let url = URL(string: "https://example.com/v1/shape")!
+
+        await transport.enqueueHTTP(
+            response: httpResponse(
+                url: url,
+                statusCode: 204,
+                headers: [
+                    "electric-handle": "h1",
+                    "electric-offset": "0_0",
+                    "electric-schema": "{}",
+                ]
+            )
+        )
+
+        let stream = ShapeStream(
+            options: ShapeStreamOptions(
+                url: url,
+                table: "todos",
+                params: [
+                    "source_id": .string("old-source"),
+                    "static": .string("static"),
+                ]
+            ),
+            configuration: .init(subscribe: false),
+            transport: transport,
+            dynamicParams: {
+                [
+                    "source_id": .string("new-source"),
+                    "dynamic": .strings(["one", "two"]),
+                    "filter": .object(["tenant": "acme"]),
+                ]
+            }
+        )
+
+        _ = try #require(await stream.poll())
+
+        let request = try #require((await transport.requests()).last)
+        let requestURL = try #require(request.url)
+        let components = try #require(URLComponents(url: requestURL, resolvingAgainstBaseURL: false))
+        let queryItems = try #require(components.queryItems)
+
+        #expect(queryItems.contains(.init(name: "source_id", value: "new-source")))
+        #expect(queryItems.contains(.init(name: "source_id", value: "old-source")) == false)
+        #expect(queryItems.contains(.init(name: "static", value: "static")))
+        #expect(queryItems.contains(.init(name: "dynamic", value: "one,two")))
+        #expect(queryItems.contains(.init(name: "filter[tenant]", value: "acme")))
     }
 
     @Test("Dynamic headers are re-resolved for each outgoing request")
@@ -323,7 +374,7 @@ struct ShapeStreamTests {
             options: ShapeStreamOptions(url: url, table: "todos"),
             configuration: .init(subscribe: false),
             transport: transport,
-            headersProvider: {
+            dynamicHeaders: {
                 ["Authorization": await provider.nextValue()]
             }
         )
@@ -459,7 +510,7 @@ struct ShapeStreamTests {
                 )
             ),
             transport: transport,
-            headersProvider: {
+            dynamicHeaders: {
                 [
                     "Authorization": "new-token",
                     "X-Dynamic": "dynamic",
@@ -2369,8 +2420,8 @@ struct ShapeStreamTests {
         #expect(requests.last?.value(forHTTPHeaderField: "Authorization") == "new-token")
     }
 
-    @Test("Headers provider failures go through onError and re-resolve on retry")
-    func headersProviderFailuresCanRetry() async throws {
+    @Test("Dynamic header failures go through onError and re-resolve on retry")
+    func dynamicHeaderFailuresCanRetry() async throws {
         let transport = TestShapeTransport()
         let provider = ThrowingHeaderProvider()
         let url = URL(string: "https://example.com/v1/shape")!
@@ -2396,7 +2447,7 @@ struct ShapeStreamTests {
                 )
             ),
             transport: transport,
-            headersProvider: {
+            dynamicHeaders: {
                 try await provider.headers()
             },
             onError: { _ in
@@ -2583,7 +2634,7 @@ struct ShapeStreamTests {
             ),
             configuration: .init(subscribe: false),
             transport: transport,
-            headersProvider: {
+            dynamicHeaders: {
                 [
                     "Authorization": "new-token",
                     "X-Dynamic": "dynamic",
@@ -2784,7 +2835,7 @@ struct ShapeStreamTests {
             ),
             configuration: .init(subscribe: true),
             transport: transport,
-            headersProvider: {
+            dynamicHeaders: {
                 [
                     "Authorization": "new-token",
                     "X-Dynamic": "dynamic",
@@ -2964,7 +3015,7 @@ struct ShapeStreamTests {
             ),
             configuration: .init(subscribe: true),
             transport: transport,
-            headersProvider: {
+            dynamicHeaders: {
                 [
                     "Authorization": "new-token",
                     "X-Dynamic": "dynamic",
