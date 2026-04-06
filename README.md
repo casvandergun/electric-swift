@@ -104,6 +104,20 @@ for try await change in shape.updates() {
 
 `ShapeStreamOptions` describes the stream you want to open: the Electric endpoint URL, table, optional column selection, optional `whereClause`, positional `whereParams`, `replica`, `log`, additional query `params`, and request headers.
 
+```swift
+let options = ShapeStreamOptions(
+    url: URL(string: "https://example.com/v1/shape")!,
+    table: "todos",
+    columns: ["id", "title", "completed"],
+    whereClause: "tenant_id = $1",
+    whereParams: ["1": "acme"],
+    params: ["source_id": "ios-client"],
+    headers: ["X-Client": "ios"]
+)
+```
+
+Use `whereParams` for `$1`, `$2`, and similar placeholders in `whereClause`. Use `params` for additional URL parameters that should be sent alongside Electric's standard shape parameters.
+
 ### `ShapeStream`
 
 `ShapeStream` is the low-level runtime. It owns the current handle, offset, cursor, schema, retry state, and live transport mode. Use it when you need direct control over:
@@ -138,7 +152,7 @@ For failure handling, `ShapeStreamConfiguration` includes a retry policy and `Sh
 
 ## Advanced Usage
 
-### Custom headers, params, and log mode
+### Static Headers, Params, and Log Mode
 
 ```swift
 let options = ShapeStreamOptions(
@@ -152,7 +166,21 @@ let options = ShapeStreamOptions(
 )
 ```
 
-### Dynamic headers and params
+Additional `params` can be a single string, an array serialized as a comma-separated value, or an object serialized as bracketed query parameters:
+
+```swift
+let options = ShapeStreamOptions(
+    url: URL(string: "https://example.com/v1/shape")!,
+    table: "todos",
+    params: [
+        "source_id": "ios-client",
+        "tags": .strings(["inbox", "today"]),
+        "metadata": .object(["client": "ios"]),
+    ]
+)
+```
+
+### Dynamic Headers and Params
 
 ```swift
 let stream = ShapeStream(
@@ -167,6 +195,8 @@ let stream = ShapeStream(
 ```
 
 `dynamicHeaders` and `dynamicParams` are resolved for every outgoing poll, SSE connect, and snapshot request. Static `options.headers` and `options.params` remain the baseline, and dynamic values override static values when they share the same key.
+
+Dynamic params are for additional URL parameters, not for changing `whereClause`. A different `whereClause` should be treated as a different shape stream; use `fetchSnapshot(_:)` or `requestSnapshot(_:)` for dynamic subset filters.
 
 ### Column mapping and transformation
 
