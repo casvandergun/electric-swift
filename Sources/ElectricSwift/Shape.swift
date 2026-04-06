@@ -42,13 +42,16 @@ public actor Shape<Model: Decodable & Sendable> {
     private var consumerTask: Task<Void, Never>?
     private var updateContinuations: [UUID: AsyncThrowingStream<ShapeChange<Model>, Error>.Continuation] = [:]
     private var readyContinuations: [UUID: CheckedContinuation<Void, Error>] = [:]
+    private var requestedSubSnapshots: Set<ShapeSubsetRequest> = []
+    private var reexecuteSnapshotsPending = false
+    private var isReexecutingSnapshots = false
 
     public init(
         stream: ShapeStream,
-        materialized: MaterializedShape<Model> = .init()
+        materialized: MaterializedShape<Model>? = nil
     ) {
         self.stream = stream
-        self.materialized = materialized
+        self.materialized = materialized ?? MaterializedShape(log: stream.log)
     }
 
     deinit {
@@ -95,9 +98,16 @@ public actor Shape<Model: Decodable & Sendable> {
     public func requestSnapshot(_ request: ShapeSubsetRequest) async throws -> ShapeSnapshotResult {
         try ensureCanRun()
         ensureStarted()
-        let result = try await stream.requestSnapshot(request)
-        ensureStarted()
-        return result
+        requestedSubSnapshots.insert(request)
+        do {
+            let result = try await stream.requestSnapshot(request)
+            try await applySnapshotResult(result)
+            ensureStarted()
+            return result
+        } catch {
+            requestedSubSnapshots.remove(request)
+            throw error
+        }
     }
 
     public func rows() async throws -> [Model] {
@@ -177,6 +187,7 @@ public actor Shape<Model: Decodable & Sendable> {
                 switch batch.boundaryKind {
                 case .mustRefetch:
                     status = .syncing
+                    reexecuteSnapshotsPending = requestedSubSnapshots.isEmpty == false
                 case .upToDate:
                     status = .upToDate
                 case .liveUpdate:
@@ -196,6 +207,7 @@ public actor Shape<Model: Decodable & Sendable> {
 
                 if status == .upToDate {
                     fulfillReadyWaiters()
+                    await reexecuteSnapshotsIfNeeded()
                 }
             }
 
@@ -255,6 +267,52 @@ public actor Shape<Model: Decodable & Sendable> {
         for continuation in updateContinuations.values {
             continuation.yield(change)
         }
+    }
+
+    private func reexecuteSnapshotsIfNeeded() async {
+        guard reexecuteSnapshotsPending else { return }
+        guard isReexecutingSnapshots == false else { return }
+        reexecuteSnapshotsPending = false
+        isReexecutingSnapshots = true
+        let snapshots = requestedSubSnapshots
+        let stream = stream
+
+        for request in snapshots {
+            do {
+                let result = try await stream.requestSnapshot(request)
+                try await applySnapshotResult(result)
+            } catch {
+                continue
+            }
+        }
+        finishSnapshotReplay()
+    }
+
+    private func applySnapshotResult(_ result: ShapeSnapshotResult) async throws {
+        let streamState = await stream.currentState()
+        await materialized.apply(
+            ShapeBatch(
+                messages: result.messages,
+                checkpoint: streamState.checkpoint,
+                schema: streamState.schema,
+                phase: streamState.phase,
+                boundaryKind: .liveUpdate
+            )
+        )
+        let value = try await materialized.values()
+        yield(
+            ShapeChange(
+                value: value,
+                rows: Array(value.values),
+                status: status,
+                lastOffset: streamState.offset,
+                lastSyncedAt: streamState.lastSyncedAt
+            )
+        )
+    }
+
+    private func finishSnapshotReplay() {
+        isReexecutingSnapshots = false
     }
 
     private func finishUpdates(throwing error: Error? = nil) {

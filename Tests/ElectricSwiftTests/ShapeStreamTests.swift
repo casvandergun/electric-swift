@@ -24,7 +24,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos"),
             configuration: .init(subscribe: false),
             session: session
         )
@@ -85,7 +85,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos"),
             configuration: .init(subscribe: false),
             session: session
         )
@@ -118,7 +118,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos"),
             configuration: .init(initialState: .init(handle: "old", offset: "9_0", isLive: true)),
             session: session
         )
@@ -144,7 +144,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos"),
             configuration: .init(
                 retryPolicy: .init(isEnabled: false)
             ),
@@ -187,7 +187,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos"),
             configuration: .init(subscribe: false),
             session: session
         )
@@ -226,7 +226,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos"),
             configuration: .init(subscribe: false),
             session: session,
             parser: ElectricParser(
@@ -260,7 +260,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(
+            options: ShapeStreamOptions(
                 url: url,
                 table: "todos",
                 headers: [
@@ -318,7 +318,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos"),
             configuration: .init(subscribe: false),
             transport: transport,
             headersProvider: {
@@ -376,7 +376,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos"),
             configuration: .init(
                 subscribe: true,
                 initialState: .init(
@@ -437,7 +437,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(
+            options: ShapeStreamOptions(
                 url: url,
                 table: "todos",
                 headers: [
@@ -508,7 +508,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos"),
             configuration: .init(
                 subscribe: true,
                 initialState: .init(
@@ -557,7 +557,7 @@ struct ShapeStreamTests {
         }
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos"),
             configuration: .init(
                 subscribe: true,
                 timeout: 30,
@@ -605,7 +605,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos"),
             configuration: .init(
                 subscribe: true,
                 initialState: .init(
@@ -653,7 +653,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos"),
             configuration: .init(
                 subscribe: true,
                 initialState: .init(
@@ -738,7 +738,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos"),
             configuration: .init(
                 subscribe: true,
                 initialState: .init(
@@ -820,7 +820,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos"),
             configuration: .init(
                 subscribe: true,
                 initialState: .init(
@@ -892,7 +892,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos"),
             configuration: .init(
                 subscribe: true,
                 initialState: .init(
@@ -961,7 +961,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos"),
             configuration: .init(
                 subscribe: true,
                 initialState: .init(
@@ -1009,8 +1009,8 @@ struct ShapeStreamTests {
 
         let transport = TestShapeTransport()
         let url = URL(string: "https://example.com/v1/shape")!
-        let shape = ElectricShape(url: url, table: "todos")
-        let shapeKey = ShapeRequestBuilder.canonicalShapeKey(shape: shape)
+        let shape = ShapeStreamOptions(url: url, table: "todos")
+        let shapeKey = ShapeRequestBuilder.canonicalShapeKey(options: shape)
         ElectricCaches.expiredShapes.markExpired(shapeKey: shapeKey, handle: "expired-handle")
         ElectricTrackers.upToDate.recordUpToDate(shapeKey: shapeKey, cursor: "cursor-replay")
 
@@ -1039,7 +1039,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: shape,
+            options: shape,
             configuration: .init(
                 subscribe: false,
                 initialState: .init(handle: "loop-handle", offset: "9_0", isLive: false, isUpToDate: false, schema: [:])
@@ -1088,7 +1088,7 @@ struct ShapeStreamTests {
         }
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos"),
             configuration: .init(
                 subscribe: false,
                 initialState: .init(handle: "loop-handle", offset: "-1", isLive: false, isUpToDate: false, schema: [:])
@@ -1105,7 +1105,7 @@ struct ShapeStreamTests {
             guard case let ShapeStreamError.fastLoopDetected(shapeKey, offset, attempts) = error else {
                 return false
             }
-            return shapeKey == ShapeRequestBuilder.canonicalShapeKey(shape: ElectricShape(url: url, table: "todos"))
+            return shapeKey == ShapeRequestBuilder.canonicalShapeKey(options: ShapeStreamOptions(url: url, table: "todos"))
                 && offset == "-1"
                 && attempts == 5
         }
@@ -1133,7 +1133,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos"),
             configuration: .init(
                 subscribe: false,
                 initialState: .init(handle: "old-handle", offset: "9_0", isLive: false, isUpToDate: false, schema: [:])
@@ -1166,8 +1166,8 @@ struct ShapeStreamTests {
         ElectricTrackers.upToDate.clear()
         let transport = TestShapeTransport()
         let url = URL(string: "https://example.com/v1/shape")!
-        let shape = ElectricShape(url: url, table: "todos")
-        let shapeKey = ShapeRequestBuilder.canonicalShapeKey(shape: shape)
+        let shape = ShapeStreamOptions(url: url, table: "todos")
+        let shapeKey = ShapeRequestBuilder.canonicalShapeKey(options: shape)
         ElectricTrackers.upToDate.recordUpToDate(shapeKey: shapeKey, cursor: "cursor-replay")
 
         await transport.enqueueHTTP(
@@ -1192,7 +1192,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: shape,
+            options: shape,
             configuration: .init(subscribe: true, preferSSE: false),
             transport: transport
         )
@@ -1204,13 +1204,13 @@ struct ShapeStreamTests {
         #expect(state.cursor == "cursor-replay")
     }
 
-    @Test("Row transform does not bypass replay suppression")
-    func rowTransformPreservesReplaySuppression() async throws {
+    @Test("Transformer does not bypass replay suppression")
+    func transformerPreservesReplaySuppression() async throws {
         ElectricTrackers.upToDate.clear()
         let transport = TestShapeTransport()
         let url = URL(string: "https://example.com/v1/shape")!
-        let shape = ElectricShape(url: url, table: "todos")
-        let shapeKey = ShapeRequestBuilder.canonicalShapeKey(shape: shape)
+        let shape = ShapeStreamOptions(url: url, table: "todos")
+        let shapeKey = ShapeRequestBuilder.canonicalShapeKey(options: shape)
         ElectricTrackers.upToDate.recordUpToDate(shapeKey: shapeKey, cursor: "cursor-replay")
 
         await transport.enqueueHTTP(
@@ -1235,16 +1235,16 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: shape,
+            options: shape,
             configuration: .init(subscribe: true, preferSSE: false),
             transport: transport,
-            parser: ElectricParser(rowTransform: { row in
+            transformer: { row in
                 var row = row
                 if case .string(let title)? = row["title"] {
                     row["title"] = .string(title.uppercased())
                 }
                 return row
-            })
+            }
         )
 
         let batch = try await stream.poll()
@@ -1283,7 +1283,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos"),
             configuration: .init(subscribe: false),
             session: session,
             debugLogger: recorder.logger()
@@ -1324,8 +1324,8 @@ struct ShapeStreamTests {
         ElectricCaches.expiredShapes.clear()
         let transport = TestShapeTransport()
         let url = URL(string: "https://example.com/v1/shape")!
-        let shape = ElectricShape(url: url, table: "todos")
-        let shapeKey = ShapeRequestBuilder.canonicalShapeKey(shape: shape)
+        let shape = ShapeStreamOptions(url: url, table: "todos")
+        let shapeKey = ShapeRequestBuilder.canonicalShapeKey(options: shape)
         ElectricCaches.expiredShapes.markExpired(shapeKey: shapeKey, handle: "expired-handle")
 
         await transport.enqueueHTTP(
@@ -1342,7 +1342,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: shape,
+            options: shape,
             configuration: .init(
                 subscribe: false,
                 initialState: .init(
@@ -1370,8 +1370,8 @@ struct ShapeStreamTests {
         ElectricCaches.expiredShapes.clear()
         let transport = TestShapeTransport()
         let url = URL(string: "https://example.com/v1/shape")!
-        let shape = ElectricShape(url: url, table: "todos")
-        let shapeKey = ShapeRequestBuilder.canonicalShapeKey(shape: shape)
+        let shape = ShapeStreamOptions(url: url, table: "todos")
+        let shapeKey = ShapeRequestBuilder.canonicalShapeKey(options: shape)
         ElectricCaches.expiredShapes.markExpired(shapeKey: shapeKey, handle: "expired-handle")
 
         await transport.enqueueHTTP(
@@ -1399,7 +1399,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: shape,
+            options: shape,
             configuration: .init(subscribe: false),
             transport: transport
         )
@@ -1421,8 +1421,8 @@ struct ShapeStreamTests {
         ElectricCaches.expiredShapes.clear()
         let transport = TestShapeTransport()
         let url = URL(string: "https://example.com/v1/shape")!
-        let shape = ElectricShape(url: url, table: "todos")
-        let shapeKey = ShapeRequestBuilder.canonicalShapeKey(shape: shape)
+        let shape = ShapeStreamOptions(url: url, table: "todos")
+        let shapeKey = ShapeRequestBuilder.canonicalShapeKey(options: shape)
         ElectricCaches.expiredShapes.markExpired(shapeKey: shapeKey, handle: "expired-handle")
 
         await transport.enqueueHTTP(
@@ -1450,7 +1450,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: shape,
+            options: shape,
             configuration: .init(
                 subscribe: false,
                 initialState: .init(handle: "expired-handle", offset: "9_0", isLive: false, isUpToDate: false, schema: [:])
@@ -1469,8 +1469,8 @@ struct ShapeStreamTests {
         ElectricCaches.expiredShapes.clear()
         let transport = TestShapeTransport()
         let url = URL(string: "https://example.com/v1/shape")!
-        let shape = ElectricShape(url: url, table: "todos")
-        let shapeKey = ShapeRequestBuilder.canonicalShapeKey(shape: shape)
+        let shape = ShapeStreamOptions(url: url, table: "todos")
+        let shapeKey = ShapeRequestBuilder.canonicalShapeKey(options: shape)
         ElectricCaches.expiredShapes.markExpired(shapeKey: shapeKey, handle: "expired-handle")
 
         for _ in 0..<2 {
@@ -1489,7 +1489,7 @@ struct ShapeStreamTests {
         }
 
         let stream = ShapeStream(
-            shape: shape,
+            options: shape,
             configuration: .init(subscribe: false, maxStaleCacheRetries: 1),
             transport: transport
         )
@@ -1501,7 +1501,7 @@ struct ShapeStreamTests {
             guard case let ShapeStreamError.staleCacheLoopExceeded(shapeKey, retries) = error else {
                 return false
             }
-            return shapeKey == ShapeRequestBuilder.canonicalShapeKey(shape: shape) && retries == 2
+            return shapeKey == ShapeRequestBuilder.canonicalShapeKey(options: shape) && retries == 2
         }
     }
 
@@ -1532,7 +1532,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos"),
             configuration: .init(subscribe: false),
             session: session
         )
@@ -1563,7 +1563,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos"),
             configuration: .init(subscribe: false),
             session: session
         )
@@ -1598,7 +1598,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos"),
             configuration: .init(
                 subscribe: false,
                 initialState: .init(handle: "h1", offset: "5_0", isLive: false, isUpToDate: false, schema: [:])
@@ -1617,8 +1617,8 @@ struct ShapeStreamTests {
         ElectricTrackers.upToDate.clear()
         let transport = TestShapeTransport()
         let url = URL(string: "https://example.com/v1/shape")!
-        let shape = ElectricShape(url: url, table: "todos")
-        let shapeKey = ShapeRequestBuilder.canonicalShapeKey(shape: shape)
+        let shape = ShapeStreamOptions(url: url, table: "todos")
+        let shapeKey = ShapeRequestBuilder.canonicalShapeKey(options: shape)
         ElectricTrackers.upToDate.recordUpToDate(shapeKey: shapeKey, cursor: "cursor-replay")
 
         for offset in ["1_0", "2_0"] {
@@ -1638,7 +1638,7 @@ struct ShapeStreamTests {
         }
 
         let stream = ShapeStream(
-            shape: shape,
+            options: shape,
             configuration: .init(subscribe: true, preferSSE: false),
             transport: transport
         )
@@ -1662,7 +1662,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos"),
             configuration: .init(subscribe: false, retryPolicy: .init(backoff: .init(maxRetries: 0))),
             transport: transport,
             onError: { _ in .stop }
@@ -1701,7 +1701,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos"),
             configuration: .init(subscribe: false),
             session: session
         )
@@ -1739,7 +1739,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos"),
             configuration: .init(subscribe: false),
             session: session
         )
@@ -1771,14 +1771,14 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos", headers: ["Authorization": "stale"]),
+            options: ShapeStreamOptions(url: url, table: "todos", headers: ["Authorization": "stale"]),
             configuration: .init(subscribe: false, retryPolicy: .init(backoff: .init(maxRetries: 0))),
             transport: transport,
             onError: { context in
                 try? await Task.sleep(nanoseconds: 5_000_000)
-                var nextShape = context.shape
+                var nextShape = context.options
                 nextShape.headers["Authorization"] = "fresh"
-                return .retryWithShape(nextShape)
+                return .retryWithOptions(nextShape)
             }
         )
 
@@ -1809,7 +1809,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos"),
             configuration: .init(
                 subscribe: false,
                 initialState: .init(handle: "h1", offset: "9_0", isLive: false, isUpToDate: false, schema: [:]),
@@ -1881,7 +1881,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos"),
             configuration: .init(
                 subscribe: false,
                 initialState: .init(handle: "loop-handle", offset: "-1", isLive: false, isUpToDate: false, schema: [:]),
@@ -1920,7 +1920,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos"),
             configuration: .init(subscribe: false, retryPolicy: .init(backoff: .init(maxRetries: 0))),
             transport: transport,
             onError: { _ in .retry }
@@ -1966,7 +1966,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos"),
             configuration: .init(subscribe: false),
             session: session
         )
@@ -1997,7 +1997,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos"),
             configuration: .init(subscribe: true, preferSSE: true),
             transport: transport
         )
@@ -2043,7 +2043,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos"),
             configuration: .init(
                 subscribe: false,
                 retryPolicy: .init(
@@ -2082,7 +2082,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos", headers: ["Authorization": "old-token"]),
+            options: ShapeStreamOptions(url: url, table: "todos", headers: ["Authorization": "old-token"]),
             configuration: .init(
                 subscribe: false,
                 retryPolicy: .init(
@@ -2094,9 +2094,9 @@ struct ShapeStreamTests {
                 guard case let .fetch(error) = context.failure, error.status == 401 else {
                     return .stop
                 }
-                var nextShape = context.shape
+                var nextShape = context.options
                 nextShape.headers["Authorization"] = "new-token"
-                return .retryWithShape(nextShape)
+                return .retryWithOptions(nextShape)
             }
         )
 
@@ -2126,7 +2126,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos"),
             configuration: .init(
                 subscribe: false,
                 retryPolicy: .init(
@@ -2163,7 +2163,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos"),
             configuration: .init(
                 subscribe: false,
                 retryPolicy: .init(
@@ -2217,7 +2217,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos"),
             configuration: .init(subscribe: false),
             transport: transport
         )
@@ -2268,7 +2268,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos"),
             configuration: .init(subscribe: false),
             transport: transport,
             parser: ElectricParser(
@@ -2311,7 +2311,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(
+            options: ShapeStreamOptions(
                 url: url,
                 table: "todos",
                 headers: [
@@ -2365,7 +2365,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos"),
             configuration: .init(subscribe: false),
             transport: transport
         )
@@ -2450,7 +2450,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos", log: .changesOnly),
             configuration: .init(subscribe: true),
             transport: transport
         )
@@ -2465,6 +2465,23 @@ struct ShapeStreamTests {
         let live = try #require(await stream.poll())
         #expect(live.messages.contains(where: { $0.key == "todo:2" }))
         #expect(live.messages.contains(where: { $0.key == "todo:1" }) == false)
+    }
+
+    @Test("requestSnapshot throws in full log mode")
+    func requestSnapshotThrowsInFullMode() async throws {
+        let stream = ShapeStream(
+            options: ShapeStreamOptions(url: URL(string: "https://example.com/v1/shape")!, table: "todos"),
+            configuration: .init(subscribe: false),
+            transport: TestShapeTransport()
+        )
+
+        do {
+            _ = try await stream.requestSnapshot(.init(limit: 1))
+            Issue.record("Expected requestSnapshot to throw in full log mode")
+        } catch ShapeStreamError.snapshotRequestUnsupportedInFullMode {
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
     }
 
     @Test("Dynamic headers are applied to requestSnapshot GET requests")
@@ -2494,9 +2511,10 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(
+            options: ShapeStreamOptions(
                 url: url,
                 table: "todos",
+                log: .changesOnly,
                 headers: [
                     "Authorization": "old-token",
                     "X-Static": "static",
@@ -2558,7 +2576,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos", log: .changesOnly),
             configuration: .init(subscribe: true),
             transport: transport,
             parser: ElectricParser(
@@ -2626,7 +2644,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos", log: .changesOnly),
             configuration: .init(subscribe: true),
             transport: transport
         )
@@ -2673,9 +2691,10 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(
+            options: ShapeStreamOptions(
                 url: url,
                 table: "todos",
+                log: .changesOnly,
                 headers: [
                     "Authorization": "old-token",
                     "X-Static": "static",
@@ -2757,7 +2776,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos", log: .changesOnly),
             configuration: .init(subscribe: true),
             transport: transport
         )
@@ -2828,7 +2847,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos", log: .changesOnly),
             configuration: .init(subscribe: true),
             transport: transport
         )
@@ -2884,7 +2903,7 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos"),
             configuration: .init(
                 subscribe: true,
                 initialState: .init(
@@ -2908,8 +2927,8 @@ struct ShapeStreamTests {
         #expect(state.schema["id"]?.type == "int8")
     }
 
-    @Test("Row transform does not bypass snapshot duplicate filtering")
-    func rowTransformPreservesSnapshotFiltering() async throws {
+    @Test("Transformer does not bypass snapshot duplicate filtering")
+    func transformerPreservesSnapshotFiltering() async throws {
         let transport = TestShapeTransport()
         let url = URL(string: "https://example.com/v1/shape")!
         let snapshotPayload = """
@@ -2969,16 +2988,16 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos", log: .changesOnly),
             configuration: .init(subscribe: true),
             transport: transport,
-            parser: ElectricParser(rowTransform: { row in
+            transformer: { row in
                 var row = row
                 if case .string(let title)? = row["title"] {
                     row["title"] = .string(title.uppercased())
                 }
                 return row
-            })
+            }
         )
 
         let snapshot = try await stream.requestSnapshot(.init(limit: 1))
@@ -2989,8 +3008,8 @@ struct ShapeStreamTests {
         #expect(live.messages.contains(where: { $0.key == "todo:1" }) == false)
     }
 
-    @Test("Row transform does not bypass must-refetch handling")
-    func rowTransformPreservesMustRefetchHandling() async throws {
+    @Test("Transformer does not bypass must-refetch handling")
+    func transformerPreservesMustRefetchHandling() async throws {
         MockURLProtocol.reset()
         let session = makeMockSession()
         defer { session.invalidateAndCancel() }
@@ -3007,14 +3026,14 @@ struct ShapeStreamTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos"),
             configuration: .init(initialState: .init(handle: "old", offset: "9_0", isLive: true)),
             session: session,
-            parser: ElectricParser(rowTransform: { row in
+            transformer: { row in
                 var row = row
                 row["transformed"] = .boolean(true)
                 return row
-            })
+            }
         )
 
         let batch = try await stream.poll()
@@ -3114,7 +3133,7 @@ struct ShapeStreamTests {
             }
 
             let stream = ShapeStream(
-                shape: ElectricShape(url: url, table: "todos"),
+                options: ShapeStreamOptions(url: url, table: "todos"),
                 configuration: .init(
                     subscribe: testCase.expectedPhase.isLive,
                     initialState: testCase.initialState,
@@ -3207,7 +3226,7 @@ struct MaterializedShapeTests {
         )
 
         let updated = try await shape.values()
-        #expect(updated["1"] == TodoValue(id: 1, title: "Updated"))
+        #expect(updated[#""public"."todos"/1"#] == TodoValue(id: 1, title: "Updated"))
 
         await shape.apply(
             ShapeBatch(
@@ -3251,5 +3270,59 @@ struct MaterializedShapeTests {
 
         let afterRefetch = await shape.snapshotRows()
         #expect(afterRefetch.isEmpty)
+    }
+
+    @Test("Changes-only materialization ignores unseen update and delete messages")
+    func changesOnlyIgnoresUnseenUpdatesAndDeletes() async throws {
+        struct TodoValue: Codable, Sendable, Equatable {
+            let id: Int
+            let title: String
+        }
+
+        let shape = MaterializedShape<TodoValue>(log: .changesOnly)
+
+        await shape.apply(
+            ShapeBatch(
+                messages: [
+                    ElectricMessage(
+                        key: "todo:1",
+                        value: ["title": .string("Patch only")],
+                        headers: .init(operation: .update)
+                    ),
+                    ElectricMessage(
+                        key: "todo:2",
+                        headers: .init(operation: .delete)
+                    ),
+                ],
+                state: testShapeState(),
+                schema: [:],
+                reachedUpToDate: false
+            )
+        )
+
+        #expect(await shape.snapshotRows().isEmpty)
+
+        await shape.apply(
+            ShapeBatch(
+                messages: [
+                    ElectricMessage(
+                        key: "todo:1",
+                        value: ["id": .integer(1), "title": .string("Inserted")],
+                        headers: .init(operation: .insert)
+                    ),
+                    ElectricMessage(
+                        key: "todo:1",
+                        value: ["title": .string("Updated")],
+                        headers: .init(operation: .update)
+                    ),
+                ],
+                state: testShapeState(),
+                schema: [:],
+                reachedUpToDate: false
+            )
+        )
+
+        let values = try await shape.values()
+        #expect(values["todo:1"] == TodoValue(id: 1, title: "Updated"))
     }
 }

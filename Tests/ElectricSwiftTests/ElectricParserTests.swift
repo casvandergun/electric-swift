@@ -233,13 +233,13 @@ struct ElectricParserTests {
         #expect(messages.first?.value?["id"] == .string("custom-42"))
     }
 
-    @Test("Row transform is applied after coercion to value and oldValue")
-    func rowTransformAppliesToValueAndOldValue() throws {
+    @Test("Transformer is applied after coercion to value and oldValue")
+    func transformerAppliesToValueAndOldValue() throws {
         let schema: ElectricSchema = [
             "id": .init(type: "int8"),
             "title": .init(type: "text"),
         ]
-        let parser = ElectricParser(rowTransform: { row in
+        let transformer: ElectricRowTransform = { row in
             var row = row
             if case .integer(let id) = row["id"] {
                 row["id"] = .string("id-\(id)")
@@ -248,7 +248,7 @@ struct ElectricParserTests {
                 row["title"] = .string(title.uppercased())
             }
             return row
-        })
+        }
 
         let messages = try PostgresValueParser.coerce(
             messages: [
@@ -260,7 +260,8 @@ struct ElectricParserTests {
                 ),
             ],
             schema: schema,
-            parser: parser
+            parser: .default,
+            transformer: transformer
         )
 
         let message = try #require(messages.first)
@@ -268,6 +269,41 @@ struct ElectricParserTests {
         #expect(message.value?["title"] == .string("AFTER"))
         #expect(message.oldValue?["id"] == .string("id-1"))
         #expect(message.oldValue?["title"] == .string("BEFORE"))
+    }
+
+    @Test("Column mapper decode runs before transformer")
+    func columnMapperDecodeRunsBeforeTransformer() throws {
+        let schema: ElectricSchema = [
+            "user_id": .init(type: "int8"),
+            "created_at": .init(type: "text"),
+        ]
+        let transformer: ElectricRowTransform = { row in
+            var row = row
+            if case .integer(let userID) = row["userId"] {
+                row["display"] = .string("user-\(userID)")
+            }
+            return row
+        }
+
+        let messages = try PostgresValueParser.coerce(
+            messages: [
+                ElectricMessage(
+                    key: "row:1",
+                    value: ["user_id": .string("42"), "created_at": .string("today")],
+                    headers: .init(operation: .insert)
+                ),
+            ],
+            schema: schema,
+            parser: .default,
+            columnMapper: snakeCamelMapper(),
+            transformer: transformer
+        )
+
+        let message = try #require(messages.first)
+        #expect(message.value?["userId"] == .integer(42))
+        #expect(message.value?["createdAt"] == .string("today"))
+        #expect(message.value?["display"] == .string("user-42"))
+        #expect(message.value?["user_id"] == nil)
     }
 
     @Test("Null in non-nullable column throws a parser error")

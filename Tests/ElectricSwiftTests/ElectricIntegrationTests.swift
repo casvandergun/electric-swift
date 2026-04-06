@@ -20,7 +20,7 @@ struct ElectricIntegrationTests {
         testLog("integration start url=\(url.absoluteString) table=\(table)")
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: table),
+            options: ShapeStreamOptions(url: url, table: table),
             configuration: .init(subscribe: false),
             debugLogger: .console(prefix: "ElectricIntegration")
         )

@@ -44,13 +44,13 @@ Use `ShapeStream` when you want direct access to Electric batches, checkpoints, 
 import ElectricSwift
 import Foundation
 
-let shape = ElectricShape(
+let options = ShapeStreamOptions(
     url: URL(string: "https://example.com/v1/shape")!,
     table: "todos"
 )
 
 let stream = ShapeStream(
-    shape: shape,
+    options: options,
     configuration: .init(subscribe: true)
 )
 
@@ -80,7 +80,7 @@ struct Todo: Codable, Sendable {
 }
 
 let stream = ShapeStream(
-    shape: ElectricShape(
+    options: ShapeStreamOptions(
         url: URL(string: "https://example.com/v1/shape")!,
         table: "todos"
     ),
@@ -100,9 +100,9 @@ for try await change in shape.updates() {
 
 ## API Overview
 
-### `ElectricShape`
+### `ShapeStreamOptions`
 
-`ElectricShape` describes the stream you want to open: the Electric endpoint URL, table, optional column selection, optional `whereClause`, replica mode, extra query parameters, and request headers.
+`ShapeStreamOptions` describes the stream you want to open: the Electric endpoint URL, table, optional column selection, optional `whereClause`, positional `params`, `replica`, `log`, extra query parameters, and request headers.
 
 ### `ShapeStream`
 
@@ -121,6 +121,7 @@ for try await change in shape.updates() {
 - `rows()` / `value()` for first-ready access
 - `currentRows()` / `currentValue()` for immediate in-memory access
 - `updates()` for observing typed state changes
+- `requestSnapshot(_:)` for changes-only subset materialization
 
 ### `MaterializedShape<Model>`
 
@@ -133,17 +134,20 @@ The package supports both:
 - `fetchSnapshot(_:)` for fetching a subset without mutating the running stream
 - `requestSnapshot(_:)` for injecting snapshot data into the live stream/session
 
-For failure handling, `ShapeStreamConfiguration` includes a retry policy and `ShapeStream` accepts an async `onError` handler that can stop, retry, or retry with an updated `ElectricShape`.
+For failure handling, `ShapeStreamConfiguration` includes a retry policy and `ShapeStream` accepts an async `onError` handler that can stop, retry, or retry with an updated `ShapeStreamOptions`.
 
 ## Advanced Usage
 
-### Custom headers and extra parameters
+### Custom headers, params, and log mode
 
 ```swift
-let shape = ElectricShape(
+let options = ShapeStreamOptions(
     url: URL(string: "https://example.com/v1/shape")!,
     table: "todos",
-    extraParameters: ["tenant_id": "acme"],
+    whereClause: "tenant_id = $1",
+    params: ["1": "acme"],
+    log: .full,
+    extraParameters: ["source_id": "ios-client"],
     headers: ["Authorization": "Bearer <token>"]
 )
 ```
@@ -152,20 +156,41 @@ let shape = ElectricShape(
 
 ```swift
 let stream = ShapeStream(
-    shape: shape,
+    options: options,
     headersProvider: {
         ["Authorization": "Bearer \(await tokenStore.currentToken())"]
     }
 )
 ```
 
-`headersProvider` is resolved for every outgoing poll, SSE connect, and snapshot request. Static `shape.headers` remain the baseline, and dynamic headers override static ones when they share the same key.
+`headersProvider` is resolved for every outgoing poll, SSE connect, and snapshot request. Static `options.headers` remain the baseline, and dynamic headers override static ones when they share the same key.
+
+### Column mapping and transformation
+
+```swift
+let stream = ShapeStream(
+    options: ShapeStreamOptions(
+        url: URL(string: "https://example.com/v1/shape")!,
+        table: "todos",
+        columns: ["createdAt"],
+        whereClause: "createdAt > $1"
+    ),
+    columnMapper: snakeCamelMapper(),
+    transformer: { row in
+        var row = row
+        row["loadedLocally"] = .boolean(true)
+        return row
+    }
+)
+```
+
+`columnMapper.decode` runs before `transformer`, matching the TypeScript client. `columnMapper.encode` is applied to selected columns, `whereClause`, subset `whereClause`, and subset `orderBy`.
 
 ### Retry policy and `onError`
 
 ```swift
 let stream = ShapeStream(
-    shape: shape,
+    options: options,
     configuration: .init(
         retryPolicy: .init(isEnabled: true)
     ),
@@ -188,7 +213,7 @@ let configuration = ShapeStreamConfiguration(
 )
 
 let stream = ShapeStream(
-    shape: shape,
+    options: options,
     configuration: configuration
 )
 ```
@@ -205,6 +230,15 @@ let snapshot = try await stream.fetchSnapshot(
     )
 )
 
+let changesOnlyStream = ShapeStream(
+    options: ShapeStreamOptions(
+        url: URL(string: "https://example.com/v1/shape")!,
+        table: "todos",
+        log: .changesOnly
+    )
+)
+let shape = Shape<Todo>(stream: changesOnlyStream)
+
 let injected = try await shape.requestSnapshot(
     ShapeSubsetRequest(
         whereClause: "completed = false",
@@ -213,7 +247,7 @@ let injected = try await shape.requestSnapshot(
 )
 ```
 
-Use `fetchSnapshot(_:)` when you want the raw snapshot result. Use `requestSnapshot(_:)` when you want the subset to flow into the active in-memory materialized state.
+Use `fetchSnapshot(_:)` when you want the raw snapshot result in any log mode. Use `requestSnapshot(_:)` in `.changesOnly` mode when you want the subset to flow into the active in-memory materialized state.
 
 ### Choosing `ShapeStream` vs `Shape<Model>`
 
@@ -241,4 +275,4 @@ Most of the suite is self-contained, but if you are working on stream lifecycle 
 - `Shape<Model>` and `MaterializedShape<Model>` are in-memory only by default.
 - Persistence strategy is application-managed.
 - The package is focused on Electric shape streams and typed materialization, not on providing a full ORM or local database layer.
-- The public API is intentionally Swift-native and does not attempt to mirror every TypeScript client surface exactly.
+- The public API follows the TypeScript client’s shape-stream naming and behavior where it maps cleanly to Swift.

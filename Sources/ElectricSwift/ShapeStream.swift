@@ -4,6 +4,7 @@ public enum ShapeStreamError: Error, Sendable, Hashable, Codable {
     case invalidResponse
     case invalidStatusCode(Int)
     case missingHeaders([String], url: String)
+    case snapshotRequestUnsupportedInFullMode
     case staleCacheLoopExceeded(shapeKey: String, retries: Int)
     case fastLoopDetected(shapeKey: String, offset: String, attempts: Int)
 }
@@ -24,6 +25,8 @@ internal enum ElectricShapeRequestMode {
 }
 
 public actor ShapeStream {
+    public nonisolated let log: ShapeLogMode
+
     private static let manualPauseReason = "manual"
     private static let snapshotPauseReason = "snapshot"
     private static let sseRetryBaseDelay: TimeInterval = 0.1
@@ -34,10 +37,12 @@ public actor ShapeStream {
     private static let fastLoopRetryBaseDelay: TimeInterval = 0.1
     private static let fastLoopRetryMaxDelay: TimeInterval = 5
 
-    private var shape: ElectricShape
+    private var options: ShapeStreamOptions
     private let configuration: ShapeStreamConfiguration
     private let transport: any ElectricShapeTransport
     private let parser: ElectricParser
+    private let columnMapper: ColumnMapper?
+    private let transformer: ElectricRowTransform?
     private let headersProvider: ShapeStreamHeadersProvider?
     private let debugLogger: ElectricDebugLogger
     private let recoveryPolicy: ShapeStreamRecoveryPolicy
@@ -66,19 +71,23 @@ public actor ShapeStream {
     private var snapshotTracker = SnapshotTracker()
 
     public init(
-        shape: ElectricShape,
+        options: ShapeStreamOptions,
         configuration: ShapeStreamConfiguration = .init(),
         session: URLSession = .shared,
         parser: ElectricParser = .default,
+        columnMapper: ColumnMapper? = nil,
+        transformer: ElectricRowTransform? = nil,
         headersProvider: ShapeStreamHeadersProvider? = nil,
         debugLogger: ElectricDebugLogger = .disabled,
         onError: ShapeStreamErrorHandler? = nil
     ) {
         self.init(
-            shape: shape,
+            options: options,
             configuration: configuration,
             transport: URLSessionElectricShapeTransport(session: session),
             parser: parser,
+            columnMapper: columnMapper,
+            transformer: transformer,
             headersProvider: headersProvider,
             debugLogger: debugLogger,
             recoveryPolicy: .live,
@@ -87,26 +96,39 @@ public actor ShapeStream {
     }
 
     init(
-        shape: ElectricShape,
+        options: ShapeStreamOptions,
         configuration: ShapeStreamConfiguration = .init(),
         transport: any ElectricShapeTransport,
         parser: ElectricParser = .default,
+        columnMapper: ColumnMapper? = nil,
+        transformer: ElectricRowTransform? = nil,
         headersProvider: ShapeStreamHeadersProvider? = nil,
         debugLogger: ElectricDebugLogger = .disabled,
         recoveryPolicy: ShapeStreamRecoveryPolicy = .live,
         onError: ShapeStreamErrorHandler? = nil
     ) {
-        self.shape = shape
+        self.options = options
         self.configuration = configuration
         self.transport = transport
         self.parser = parser
+        self.columnMapper = columnMapper
+        self.transformer = transformer
         self.headersProvider = headersProvider
         self.debugLogger = debugLogger
         self.recoveryPolicy = recoveryPolicy
         self.onError = onError
-        self.shapeKey = ShapeRequestBuilder.canonicalShapeKey(shape: shape)
+        self.log = options.log
+        self.shapeKey = ShapeRequestBuilder.canonicalShapeKey(options: options, columnMapper: columnMapper)
 
         var initialState = configuration.initialState
+        if initialState == ShapeStreamState() {
+            if let offset = options.offset {
+                initialState.offset = offset
+            }
+            if let handle = options.handle {
+                initialState.handle = handle
+            }
+        }
         if initialState.phase == .initial && initialState.isLive {
             initialState.phase = .liveLongPoll
         }
@@ -187,6 +209,9 @@ public actor ShapeStream {
     }
 
     public func requestSnapshot(_ request: ShapeSubsetRequest) async throws -> ShapeSnapshotResult {
+        guard options.log == .changesOnly else {
+            throw ShapeStreamError.snapshotRequestUnsupportedInFullMode
+        }
         guard isStopped == false else {
             return try await fetchSnapshotInternal(request, updateStateAfterSuccess: false)
         }
@@ -197,7 +222,12 @@ public actor ShapeStream {
         currentPollTask = nil
 
         do {
-            let result = try await fetchSnapshotInternal(request, updateStateAfterSuccess: true)
+            let result: ShapeSnapshotResult
+            do {
+                result = try await fetchSnapshotInternal(request, updateStateAfterSuccess: true)
+            } catch is CancellationError where Task.isCancelled == false {
+                result = try await fetchSnapshotInternal(request, updateStateAfterSuccess: true)
+            }
             let snapshotMessages = result.messages + [
                 ElectricMessage(
                     headers: .init(
@@ -326,7 +356,7 @@ public actor ShapeStream {
                 return batch
             } catch is CancellationError {
                 currentPollTask = nil
-                if isStopped || pauseReasons.isEmpty == false || forceCatchUpBoundary {
+                if isStopped || pauseReasons.isEmpty == false || forceCatchUpBoundary || generation != requestGeneration {
                     return nil
                 }
                 throw CancellationError()
@@ -369,7 +399,6 @@ public actor ShapeStream {
         }
 
         let request = try await makeRequest(
-            shape: shape,
             state: state,
             timeout: configuration.timeout,
             mode: mode,
@@ -392,13 +421,12 @@ public actor ShapeStream {
         case 409:
             return handleConflictResponse(response: result.response)
         default:
-            throw FetchError.from(response: result.response, data: result.data, url: request.url?.absoluteString ?? shape.url.absoluteString)
+            throw FetchError.from(response: result.response, data: result.data, url: request.url?.absoluteString ?? options.url.absoluteString)
         }
     }
 
     private func pollSSE(generation: Int) async throws -> ElectricShapeBatch? {
         let request = try await makeRequest(
-            shape: shape,
             state: state,
             timeout: configuration.timeout,
             mode: .liveSSE,
@@ -454,7 +482,9 @@ public actor ShapeStream {
                         let message = try PostgresValueParser.coerce(
                             messages: [decoded],
                             schema: state.schema,
-                            parser: parser
+                            parser: parser,
+                            columnMapper: columnMapper,
+                            transformer: transformer
                         ).first ?? decoded
                         logMessage(message, source: "sse", eventName: event.effectiveEvent)
                         bufferedMessages.append(message)
@@ -485,7 +515,7 @@ public actor ShapeStream {
                 _ = handleSSEClosure(startedAt: startedAt, wasAborted: false)
                 return handleConflictResponse(response: result.response)
             default:
-                throw FetchError.from(response: result.response, data: Data(), url: request.url?.absoluteString ?? shape.url.absoluteString)
+                throw FetchError.from(response: result.response, data: Data(), url: request.url?.absoluteString ?? options.url.absoluteString)
             }
         } catch is CancellationError {
             _ = handleSSEClosure(startedAt: startedAt, wasAborted: true)
@@ -514,7 +544,7 @@ public actor ShapeStream {
             }
         }
 
-        try validateResponseHeaders(response: response, mode: mode, url: request.url?.absoluteString ?? shape.url.absoluteString)
+        try validateResponseHeaders(response: response, mode: mode, url: request.url?.absoluteString ?? options.url.absoluteString)
         updateState(from: response, mode: mode)
         staleCacheRetryCount = 0
         staleCacheBuster = nil
@@ -853,7 +883,13 @@ public actor ShapeStream {
             return []
         }
         let messages = try decoder.decode([ElectricMessage].self, from: data)
-        let coercedMessages = try PostgresValueParser.coerce(messages: messages, schema: schema, parser: parser)
+        let coercedMessages = try PostgresValueParser.coerce(
+            messages: messages,
+            schema: schema,
+            parser: parser,
+            columnMapper: columnMapper,
+            transformer: transformer
+        )
         for message in coercedMessages {
             logMessage(message, source: source)
         }
@@ -872,8 +908,8 @@ public actor ShapeStream {
 
     private func shapeMetadata(_ extra: [String: String] = [:]) -> [String: String] {
         var metadata: [String: String] = [
-            "table": shape.table ?? "",
-            "where": shape.whereClause ?? "",
+            "table": options.table ?? "",
+            "where": options.whereClause ?? "",
             "offset": state.offset,
             "phase": String(describing: state.phase),
         ]
@@ -979,12 +1015,11 @@ public actor ShapeStream {
         _ request: ShapeSubsetRequest,
         updateStateAfterSuccess: Bool
     ) async throws -> ShapeSnapshotResult {
-        let originalShape = shape
+        let originalOptions = options
         var attempt = 0
 
         while true {
             let snapshotRequest = try await makeSnapshotRequest(
-                shape: shape,
                 state: state,
                 timeout: configuration.timeout,
                 subset: request,
@@ -1000,7 +1035,9 @@ public actor ShapeStream {
                     let messages = try PostgresValueParser.coerce(
                         messages: payload.data,
                         schema: effectiveSchema,
-                        parser: parser
+                        parser: parser,
+                        columnMapper: columnMapper,
+                        transformer: transformer
                     )
                     let responseHandle = result.response.value(forHTTPHeaderField: ElectricProtocolValues.handleHeader)
                     let responseOffset = result.response.value(forHTTPHeaderField: ElectricProtocolValues.offsetHeader)
@@ -1035,7 +1072,7 @@ public actor ShapeStream {
                         throw FetchError.from(
                             response: result.response,
                             data: result.data,
-                            url: snapshotRequest.url?.absoluteString ?? originalShape.url.absoluteString
+                            url: snapshotRequest.url?.absoluteString ?? originalOptions.url.absoluteString
                         )
                     }
                     continue
@@ -1043,7 +1080,7 @@ public actor ShapeStream {
                     throw FetchError.from(
                         response: result.response,
                         data: result.data,
-                        url: snapshotRequest.url?.absoluteString ?? originalShape.url.absoluteString
+                        url: snapshotRequest.url?.absoluteString ?? originalOptions.url.absoluteString
                     )
                 }
             } catch {
@@ -1066,7 +1103,7 @@ public actor ShapeStream {
         let decision = await onError(
             ShapeStreamErrorContext(
                 failure: ShapeStreamFailure.wrap(error),
-                shape: shape,
+                options: options,
                 state: state
             )
         )
@@ -1077,16 +1114,16 @@ public actor ShapeStream {
         case .retry:
             resetFastLoopState()
             return true
-        case .retryWithShape(let newShape):
+        case .retryWithOptions(let newOptions):
             resetFastLoopState()
-            shape = newShape
-            shapeKey = ShapeRequestBuilder.canonicalShapeKey(shape: newShape)
+            options = newOptions
+            shapeKey = ShapeRequestBuilder.canonicalShapeKey(options: newOptions, columnMapper: columnMapper)
             return true
         }
     }
 
     private func resolveRequestHeaders() async throws -> [String: String] {
-        var headers = shape.headers
+        var headers = options.headers
         if let headersProvider {
             let dynamicHeaders = try await headersProvider()
             for (key, value) in dynamicHeaders {
@@ -1097,7 +1134,6 @@ public actor ShapeStream {
     }
 
     private func makeRequest(
-        shape: ElectricShape,
         state: ShapeStreamState,
         timeout: TimeInterval,
         mode: ElectricShapeRequestMode,
@@ -1105,17 +1141,17 @@ public actor ShapeStream {
     ) async throws -> URLRequest {
         let headers = try await resolveRequestHeaders()
         return ShapeRequestBuilder.makeRequest(
-            shape: shape,
+            options: options,
             state: state,
             timeout: timeout,
             mode: mode,
             headers: headers,
-            staleCacheBuster: staleCacheBuster
+            staleCacheBuster: staleCacheBuster,
+            columnMapper: columnMapper
         )
     }
 
     private func makeSnapshotRequest(
-        shape: ElectricShape,
         state: ShapeStreamState,
         timeout: TimeInterval,
         subset: ShapeSubsetRequest,
@@ -1123,12 +1159,13 @@ public actor ShapeStream {
     ) async throws -> URLRequest {
         let headers = try await resolveRequestHeaders()
         return try ShapeRequestBuilder.makeSnapshotRequest(
-            shape: shape,
+            options: options,
             state: state,
             timeout: timeout,
             subset: subset,
             headers: headers,
-            staleCacheBuster: staleCacheBuster
+            staleCacheBuster: staleCacheBuster,
+            columnMapper: columnMapper
         )
     }
 
@@ -1147,7 +1184,7 @@ public actor ShapeStream {
                     let error = FetchError.from(
                         response: result.response,
                         data: result.data,
-                        url: request.url?.absoluteString ?? shape.url.absoluteString
+                        url: request.url?.absoluteString ?? options.url.absoluteString
                     )
                     guard FetchSupport.shouldRetry(
                         error: error,
@@ -1210,7 +1247,7 @@ public actor ShapeStream {
                     let error = FetchError.from(
                         response: result.response,
                         data: Data(),
-                        url: request.url?.absoluteString ?? shape.url.absoluteString
+                        url: request.url?.absoluteString ?? options.url.absoluteString
                     )
                     guard FetchSupport.shouldRetry(
                         error: error,

@@ -47,7 +47,7 @@ struct ShapeTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos"),
             configuration: .init(subscribe: false),
             transport: transport
         )
@@ -95,7 +95,7 @@ struct ShapeTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos", log: .changesOnly),
             configuration: .init(subscribe: false),
             transport: transport
         )
@@ -165,7 +165,7 @@ struct ShapeTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos", log: .changesOnly),
             configuration: .init(subscribe: false),
             transport: transport
         )
@@ -189,6 +189,171 @@ struct ShapeTests {
         await shape.stop()
     }
 
+    @Test("requested snapshots are replayed after must-refetch")
+    func requestedSnapshotsReplayAfterMustRefetch() async throws {
+        let transport = TestShapeTransport()
+        let url = URL(string: "https://example.com/v1/shape")!
+        let schema = #"{"id":{"type":"int8"},"title":{"type":"text"}}"#
+
+        func snapshotPayload(title: String, mark: Int) -> Data {
+            Data(
+                """
+                {
+                  "metadata": {
+                    "snapshot_mark": \(mark),
+                    "xmin": "100",
+                    "xmax": "200",
+                    "xip_list": [],
+                    "database_lsn": "\(mark)"
+                  },
+                  "data": [
+                    {
+                      "key": "todo:1",
+                      "value": { "id": "1", "title": "\(title)" },
+                      "headers": { "operation": "insert" }
+                    }
+                  ]
+                }
+                """.utf8
+            )
+        }
+
+        await transport.enqueueHTTP(
+            response: httpResponse(
+                url: url,
+                statusCode: 200,
+                headers: [
+                    "electric-handle": "h1",
+                    "electric-offset": "0_0",
+                    "electric-schema": schema,
+                ]
+            ),
+            data: try jsonData([ElectricMessage.upToDate()])
+        )
+        await transport.enqueueHTTP(
+            response: httpResponse(
+                url: url,
+                statusCode: 409,
+                headers: ["Location": "https://example.com/v1/shape?handle=cancelled-live"]
+            ),
+            delayMilliseconds: 5_000
+        )
+        await transport.enqueueHTTP(
+            response: httpResponse(
+                url: url,
+                statusCode: 200,
+                headers: [
+                    "electric-handle": "h1",
+                    "electric-offset": "5_0",
+                    "electric-schema": schema,
+                ]
+            ),
+            data: snapshotPayload(title: "First snapshot", mark: 1)
+        )
+        await transport.enqueueHTTP(
+            response: httpResponse(
+                url: url,
+                statusCode: 409,
+                headers: ["Location": "https://example.com/v1/shape?handle=h2"]
+            )
+        )
+        await transport.enqueueHTTP(
+            response: httpResponse(
+                url: url,
+                statusCode: 204,
+                headers: [
+                    "electric-handle": "h2",
+                    "electric-offset": "0_0",
+                    "electric-schema": schema,
+                ]
+            )
+        )
+        await transport.enqueueHTTP(
+            response: httpResponse(
+                url: url,
+                statusCode: 204,
+                headers: [
+                    "electric-handle": "h2",
+                    "electric-offset": "0_0",
+                    "electric-schema": schema,
+                ]
+            ),
+            delayMilliseconds: 5_000
+        )
+        await transport.enqueueHTTP(
+            response: httpResponse(
+                url: url,
+                statusCode: 200,
+                headers: [
+                    "electric-handle": "h2",
+                    "electric-offset": "9_0",
+                    "electric-schema": schema,
+                ]
+            ),
+            data: snapshotPayload(title: "Replayed snapshot", mark: 2)
+        )
+        await transport.enqueueHTTP(
+            response: httpResponse(
+                url: url,
+                statusCode: 200,
+                headers: [
+                    "electric-handle": "h2",
+                    "electric-offset": "9_0",
+                    "electric-schema": schema,
+                ]
+            ),
+            data: snapshotPayload(title: "Replayed snapshot", mark: 3)
+        )
+        await transport.enqueueHTTP(
+            response: httpResponse(
+                url: url,
+                statusCode: 204,
+                headers: [
+                    "electric-handle": "h2",
+                    "electric-offset": "9_0",
+                    "electric-schema": schema,
+                ]
+            ),
+            delayMilliseconds: 5_000
+        )
+
+        let stream = ShapeStream(
+            options: ShapeStreamOptions(url: url, table: "todos", log: .changesOnly),
+            configuration: .init(subscribe: true, preferSSE: false),
+            transport: transport
+        )
+        let shape = Shape<Todo>(stream: stream)
+
+        let initialRows = try await shape.rows()
+        #expect(initialRows.isEmpty)
+
+        let livePollDeadline = Date().addingTimeInterval(1)
+        while await transport.requests().count < 2 && Date() < livePollDeadline {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+
+        _ = try await shape.requestSnapshot(.init(limit: 1))
+        try await waitForTitle("Replayed snapshot", in: shape)
+
+        let snapshotRequests = await transport.requests().filter { request in
+            request.url?.query?.contains("subset__limit=1") == true
+        }
+        #expect(snapshotRequests.count >= 2)
+        await shape.stop()
+    }
+
+    private func waitForTitle(_ title: String, in shape: Shape<Todo>) async throws {
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline {
+            let rows = try await shape.currentRows()
+            if rows.contains(where: { $0.title == title }) {
+                return
+            }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        Issue.record("Timed out waiting for \(title)")
+    }
+
     @Test("start is idempotent and exposes offset sync metadata")
     func startIsIdempotent() async throws {
         let transport = TestShapeTransport()
@@ -207,7 +372,7 @@ struct ShapeTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos"),
             configuration: .init(subscribe: false),
             transport: transport
         )
@@ -236,7 +401,7 @@ struct ShapeTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos"),
             configuration: .init(subscribe: false),
             transport: transport
         )
@@ -282,7 +447,7 @@ struct ShapeTests {
         )
 
         let stream = ShapeStream(
-            shape: ElectricShape(url: url, table: "todos"),
+            options: ShapeStreamOptions(url: url, table: "todos"),
             configuration: .init(subscribe: false),
             transport: transport
         )

@@ -17,20 +17,15 @@ public enum ElectricParserError: Error, Sendable, Hashable {
 /// Configures how incoming Electric rows are coerced from raw Postgres wire values.
 ///
 /// `ElectricParser.default` preserves the package's built-in behavior for standard scalar
-/// types and Postgres arrays. Callers can override individual scalar parsers and optionally
-/// apply a row transform after schema-based coercion has completed.
+/// types and Postgres arrays. Callers can override individual scalar parsers.
 public struct ElectricParser: Sendable {
     /// Per-type scalar parsers keyed by Postgres type name.
     public let scalarParsers: [String: ElectricParseFunction]
-    /// Optional transform applied to each coerced `value` and `oldValue` row.
-    public let rowTransform: ElectricRowTransform?
 
     public init(
-        scalarParsers: [String: ElectricParseFunction] = [:],
-        rowTransform: ElectricRowTransform? = nil
+        scalarParsers: [String: ElectricParseFunction] = [:]
     ) {
         self.scalarParsers = scalarParsers
-        self.rowTransform = rowTransform
     }
 
     /// The package's built-in parser configuration.
@@ -88,8 +83,4 @@ extension ElectricParser {
         scalarParsers[type] ?? ElectricParser.default.scalarParsers[type]
     }
 
-    func transform(row: ElectricRow) throws -> ElectricRow {
-        guard let rowTransform else { return row }
-        return try rowTransform(row)
-    }
 }

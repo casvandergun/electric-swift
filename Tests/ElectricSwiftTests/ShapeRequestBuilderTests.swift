@@ -5,11 +5,12 @@ import Testing
 struct ShapeRequestBuilderTests {
     @Test("Builds Electric protocol URL parameters")
     func buildsURLParameters() throws {
-        let shape = ElectricShape(
+        let shape = ShapeStreamOptions(
             url: URL(string: "https://example.com/v1/shape")!,
             table: "issues",
             columns: ["id", "title"],
             whereClause: "priority = 'high'",
+            params: ["1": "high"],
             replica: .full,
             extraParameters: ["source_id": "ios-client"]
         )
@@ -20,7 +21,7 @@ struct ShapeRequestBuilderTests {
             isLive: true
         )
 
-        let url = ShapeRequestBuilder.makeURL(shape: shape, state: state)
+        let url = ShapeRequestBuilder.makeURL(options: shape, state: state)
         let components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
         let queryItems = try #require(components.queryItems)
 
@@ -30,13 +31,41 @@ struct ShapeRequestBuilderTests {
         #expect(queryItems.contains(.init(name: "cursor", value: "cursor-1")))
         #expect(queryItems.contains(.init(name: "live", value: "true")))
         #expect(queryItems.contains(.init(name: "replica", value: "full")))
-        #expect(queryItems.contains(.init(name: "columns", value: "id,title")))
+        #expect(queryItems.contains(.init(name: "log", value: "full")))
+        #expect(queryItems.contains(.init(name: "columns", value: #""id","title""#)))
+        #expect(queryItems.contains(.init(name: "params[1]", value: "high")))
         #expect(queryItems.contains(.init(name: "source_id", value: "ios-client")))
+    }
+
+    @Test("Column mapper encodes request fields")
+    func columnMapperEncodesRequestFields() throws {
+        let shape = ShapeStreamOptions(
+            url: URL(string: "https://example.com/v1/shape")!,
+            table: "issues",
+            columns: ["userId", "createdAt"],
+            whereClause: "userId = $1 AND status = 'open'",
+            params: ["1": "42"],
+            log: .changesOnly
+        )
+        let state = ShapeStreamState(offset: "-1", isLive: false, isUpToDate: false)
+
+        let url = ShapeRequestBuilder.makeURL(
+            options: shape,
+            state: state,
+            columnMapper: snakeCamelMapper()
+        )
+        let components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
+        let queryItems = try #require(components.queryItems)
+
+        #expect(queryItems.contains(.init(name: "where", value: "user_id = $1 AND status = 'open'")))
+        #expect(queryItems.contains(.init(name: "columns", value: #""user_id","created_at""#)))
+        #expect(queryItems.contains(.init(name: "params[1]", value: "42")))
+        #expect(queryItems.contains(.init(name: "log", value: "changes_only")))
     }
 
     @Test("Builds snapshot GET parameters without live cursor state")
     func buildsSnapshotGETParameters() throws {
-        let shape = ElectricShape(
+        let shape = ShapeStreamOptions(
             url: URL(string: "https://example.com/v1/shape")!,
             table: "issues"
         )
@@ -56,10 +85,11 @@ struct ShapeRequestBuilderTests {
         )
 
         let request = try ShapeRequestBuilder.makeSnapshotRequest(
-            shape: shape,
+            options: shape,
             state: state,
             timeout: 30,
-            subset: subset
+            subset: subset,
+            columnMapper: snakeCamelMapper()
         )
         let requestURL = try #require(request.url)
         let components = try #require(URLComponents(url: requestURL, resolvingAgainstBaseURL: false))
@@ -78,7 +108,7 @@ struct ShapeRequestBuilderTests {
 
     @Test("Builds snapshot POST body")
     func buildsSnapshotPOSTBody() throws {
-        let shape = ElectricShape(
+        let shape = ShapeStreamOptions(
             url: URL(string: "https://example.com/v1/shape")!,
             table: "issues"
         )
@@ -93,10 +123,11 @@ struct ShapeRequestBuilderTests {
         )
 
         let request = try ShapeRequestBuilder.makeSnapshotRequest(
-            shape: shape,
+            options: shape,
             state: state,
             timeout: 30,
-            subset: subset
+            subset: subset,
+            columnMapper: snakeCamelMapper()
         )
 
         #expect(request.httpMethod == "POST")
@@ -113,18 +144,19 @@ struct ShapeRequestBuilderTests {
 
     @Test("Omits handle query parameter when initial state has no handle")
     func omitsHandleForInitialRequests() throws {
-        let shape = ElectricShape(
+        let shape = ShapeStreamOptions(
             url: URL(string: "https://example.com/v1/shape")!,
             table: "issues"
         )
         let state = ShapeStreamState(offset: "-1", isLive: false, isUpToDate: false)
 
-        let url = ShapeRequestBuilder.makeURL(shape: shape, state: state)
+        let url = ShapeRequestBuilder.makeURL(options: shape, state: state)
         let components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
         let queryItems = try #require(components.queryItems)
 
         #expect(queryItems.contains(.init(name: "table", value: "issues")))
         #expect(queryItems.contains(.init(name: "offset", value: "-1")))
+        #expect(queryItems.contains(.init(name: "log", value: "full")))
         #expect(queryItems.contains(where: { $0.name == "handle" }) == false)
     }
 }

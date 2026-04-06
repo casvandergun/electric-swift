@@ -5,12 +5,21 @@ public enum ElectricReplica: String, Sendable, Codable, Hashable {
     case full
 }
 
-public struct ElectricShape: Sendable, Hashable, Codable {
+public enum ShapeLogMode: String, Sendable, Codable, Hashable {
+    case changesOnly = "changes_only"
+    case full
+}
+
+public struct ShapeStreamOptions: Sendable, Hashable, Codable {
     public var url: URL
     public var table: String?
     public var columns: [String]
     public var whereClause: String?
+    public var params: [String: String]
     public var replica: ElectricReplica
+    public var log: ShapeLogMode
+    public var offset: String?
+    public var handle: String?
     public var extraParameters: [String: String]
     public var headers: [String: String]
 
@@ -19,7 +28,11 @@ public struct ElectricShape: Sendable, Hashable, Codable {
         table: String? = nil,
         columns: [String] = [],
         whereClause: String? = nil,
+        params: [String: String] = [:],
         replica: ElectricReplica = .default,
+        log: ShapeLogMode = .full,
+        offset: String? = nil,
+        handle: String? = nil,
         extraParameters: [String: String] = [:],
         headers: [String: String] = [:]
     ) {
@@ -27,7 +40,11 @@ public struct ElectricShape: Sendable, Hashable, Codable {
         self.table = table
         self.columns = columns
         self.whereClause = whereClause
+        self.params = params
         self.replica = replica
+        self.log = log
+        self.offset = offset
+        self.handle = handle
         self.extraParameters = extraParameters
         self.headers = headers
     }
@@ -99,16 +116,16 @@ public enum ShapeStreamFailure: Error, Sendable {
 
 public struct ShapeStreamErrorContext: Sendable {
     public let failure: ShapeStreamFailure
-    public let shape: ElectricShape
+    public let options: ShapeStreamOptions
     public let state: ShapeStreamState
 
     public init(
         failure: ShapeStreamFailure,
-        shape: ElectricShape,
+        options: ShapeStreamOptions,
         state: ShapeStreamState
     ) {
         self.failure = failure
-        self.shape = shape
+        self.options = options
         self.state = state
     }
 }
@@ -116,7 +133,7 @@ public struct ShapeStreamErrorContext: Sendable {
 public enum ShapeStreamErrorDecision: Sendable {
     case stop
     case retry
-    case retryWithShape(ElectricShape)
+    case retryWithOptions(ShapeStreamOptions)
 }
 
 public typealias ShapeStreamErrorHandler =

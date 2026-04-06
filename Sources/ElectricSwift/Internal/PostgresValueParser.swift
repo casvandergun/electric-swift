@@ -4,19 +4,33 @@ enum PostgresValueParser {
     static func coerce(
         messages: [ElectricMessage],
         schema: ElectricSchema,
-        parser: ElectricParser
+        parser: ElectricParser,
+        columnMapper: ColumnMapper? = nil,
+        transformer: ElectricRowTransform? = nil
     ) throws -> [ElectricMessage] {
-        if schema.isEmpty, parser.rowTransform == nil {
+        if schema.isEmpty, columnMapper == nil, transformer == nil {
             return messages
         }
 
         return try messages.map { message in
             var updated = message
             if let value = message.value {
-                updated.value = try coerce(row: value, schema: schema, parser: parser)
+                updated.value = try coerce(
+                    row: value,
+                    schema: schema,
+                    parser: parser,
+                    columnMapper: columnMapper,
+                    transformer: transformer
+                )
             }
             if let oldValue = message.oldValue {
-                updated.oldValue = try coerce(row: oldValue, schema: schema, parser: parser)
+                updated.oldValue = try coerce(
+                    row: oldValue,
+                    schema: schema,
+                    parser: parser,
+                    columnMapper: columnMapper,
+                    transformer: transformer
+                )
             }
             return updated
         }
@@ -25,7 +39,9 @@ enum PostgresValueParser {
     private static func coerce(
         row: ElectricRow,
         schema: ElectricSchema,
-        parser: ElectricParser
+        parser: ElectricParser,
+        columnMapper: ColumnMapper?,
+        transformer: ElectricRowTransform?
     ) throws -> ElectricRow {
         let coerced = try Dictionary(uniqueKeysWithValues: row.map { key, value in
             guard let column = schema[key] else {
@@ -33,7 +49,16 @@ enum PostgresValueParser {
             }
             return (key, try coerce(value: value, column: column, columnName: key, parser: parser))
         })
-        return try parser.transform(row: coerced)
+        let mapped: ElectricRow
+        if let columnMapper {
+            mapped = Dictionary(uniqueKeysWithValues: coerced.map { key, value in
+                (columnMapper.decode(key), value)
+            })
+        } else {
+            mapped = coerced
+        }
+        guard let transformer else { return mapped }
+        return try transformer(mapped)
     }
 
     private static func coerce(
