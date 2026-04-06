@@ -567,32 +567,21 @@ public actor ShapeStream {
             return nil
         }
 
-        if state.handle == nil || state.handle == expiredHandle {
-            staleCacheRetryCount += 1
-            staleCacheBuster = UUID().uuidString
-            state.phase = .staleRetry
-            if staleCacheRetryCount > configuration.maxStaleCacheRetries {
-                return .retry
-            }
-            debugLogger.log(
-                .info,
-                category: "ShapeStream",
-                message: "stale cached response detected; retrying with cache buster",
-                metadata: shapeMetadata([
-                    "expiredHandle": expiredHandle,
-                    "retry": String(staleCacheRetryCount),
-                ])
-            )
-            return .ignore
+        staleCacheRetryCount += 1
+        staleCacheBuster = UUID().uuidString
+        state.phase = .staleRetry
+        state.isUpToDate = false
+        if staleCacheRetryCount > configuration.maxStaleCacheRetries {
+            return .retry
         }
 
         debugLogger.log(
             .info,
             category: "ShapeStream",
-            message: "ignored stale cached response with expired handle",
+            message: "stale cached response detected; retrying with cache buster",
             metadata: shapeMetadata([
                 "expiredHandle": expiredHandle,
-                "currentHandle": state.handle ?? "",
+                "retry": String(staleCacheRetryCount),
             ])
         )
         return .ignore
@@ -767,7 +756,7 @@ public actor ShapeStream {
         ElectricTrackers.upToDate.delete(shapeKey: shapeKey)
 
         let replacementHandle = extractHandle(from: response)
-        state.reset(handle: replacementHandle)
+        state.reset(handle: replacementHandle, preserveLastSyncedAt: true)
         state.phase = .initial
         replayCursor = nil
         staleCacheRetryCount = 0

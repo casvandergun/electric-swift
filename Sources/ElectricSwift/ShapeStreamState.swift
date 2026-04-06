@@ -102,8 +102,11 @@ public struct ShapeStreamState: Sendable, Hashable, Codable {
         set { checkpoint.lastSyncedAt = newValue }
     }
 
-    public mutating func reset(handle: String? = nil) {
-        self.checkpoint = ElectricShapeCheckpoint(handle: handle)
+    public mutating func reset(handle: String? = nil, preserveLastSyncedAt: Bool = false) {
+        self.checkpoint = ElectricShapeCheckpoint(
+            handle: handle,
+            lastSyncedAt: preserveLastSyncedAt ? checkpoint.lastSyncedAt : nil
+        )
         self.phase = .initial
         self.isUpToDate = false
         self.schema = [:]

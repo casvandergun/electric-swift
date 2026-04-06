@@ -106,6 +106,7 @@ struct ShapeStreamTests {
         let session = makeMockSession()
         defer { session.invalidateAndCancel() }
         let url = URL(string: "https://example.com/v1/shape")!
+        let lastSyncedAt = Date()
 
         MockURLProtocol.enqueue(
             response: httpResponse(
@@ -119,7 +120,7 @@ struct ShapeStreamTests {
 
         let stream = ShapeStream(
             options: ShapeStreamOptions(url: url, table: "todos"),
-            configuration: .init(initialState: .init(handle: "old", offset: "9_0", isLive: true)),
+            configuration: .init(initialState: .init(handle: "old", offset: "9_0", isLive: true, lastSyncedAt: lastSyncedAt)),
             session: session
         )
 
@@ -130,6 +131,7 @@ struct ShapeStreamTests {
         #expect(state.handle == "replaced-handle")
         #expect(state.offset == "-1")
         #expect(state.isUpToDate == false)
+        #expect(state.lastSyncedAt == lastSyncedAt)
     }
 
     @Test("Unexpected HTTP status throws")
@@ -1204,6 +1206,68 @@ struct ShapeStreamTests {
         #expect(state.cursor == "cursor-replay")
     }
 
+    @Test("Replay mode preserves cursor across non-boundary responses")
+    func replayModePreservesCursorAcrossNonBoundaryResponses() async throws {
+        ElectricTrackers.upToDate.clear()
+        let transport = TestShapeTransport()
+        let url = URL(string: "https://example.com/v1/shape")!
+        let shape = ShapeStreamOptions(url: url, table: "todos")
+        let shapeKey = ShapeRequestBuilder.canonicalShapeKey(options: shape)
+        ElectricTrackers.upToDate.recordUpToDate(shapeKey: shapeKey, cursor: "cursor-replay")
+
+        await transport.enqueueHTTP(
+            response: httpResponse(
+                url: url,
+                statusCode: 200,
+                headers: [
+                    "electric-handle": "h1",
+                    "electric-offset": "1_0",
+                    "electric-cursor": "cursor-replay",
+                    "electric-schema": #"{"id":{"type":"int8"}}"#,
+                ]
+            ),
+            data: try jsonData([
+                ElectricMessage(
+                    key: "\"public\".\"todos\"/1",
+                    value: ["id": .string("1")],
+                    headers: .init(operation: .insert)
+                ),
+            ])
+        )
+        await transport.enqueueHTTP(
+            response: httpResponse(
+                url: url,
+                statusCode: 200,
+                headers: [
+                    "electric-handle": "h1",
+                    "electric-offset": "2_0",
+                    "electric-cursor": "cursor-replay",
+                    "electric-schema": #"{"id":{"type":"int8"}}"#,
+                ]
+            ),
+            data: try jsonData([ElectricMessage.upToDate()])
+        )
+
+        let stream = ShapeStream(
+            options: shape,
+            configuration: .init(subscribe: true, preferSSE: false),
+            transport: transport
+        )
+
+        let partial = try await stream.poll()
+        #expect(partial == nil)
+        let replayingState = await stream.currentState()
+        #expect(replayingState.phase == .replaying)
+        #expect(replayingState.cursor == "cursor-replay")
+        #expect(replayingState.isUpToDate == false)
+
+        let duplicateBoundary = try await stream.poll()
+        #expect(duplicateBoundary == nil)
+        let liveState = await stream.currentState()
+        #expect(liveState.cursor == "cursor-replay")
+        #expect(liveState.isUpToDate == true)
+    }
+
     @Test("Transformer does not bypass replay suppression")
     func transformerPreservesReplaySuppression() async throws {
         ElectricTrackers.upToDate.clear()
@@ -1319,8 +1383,153 @@ struct ShapeStreamTests {
         #expect(batchEvent.metadata["boundary"] == ElectricShapeBoundaryKind.upToDate.rawValue)
     }
 
-    @Test("Ignored stale cached response does not mutate state when local handle differs")
-    func ignoredStaleResponseDoesNotMutateState() async throws {
+    @Test("Stale cached response retries with cache buster when local handle differs")
+    func staleResponseRetriesWhenLocalHandleDiffers() async throws {
+        ElectricCaches.expiredShapes.clear()
+        let transport = TestShapeTransport()
+        let url = URL(string: "https://example.com/v1/shape")!
+        let shape = ShapeStreamOptions(url: url, table: "todos")
+        let shapeKey = ShapeRequestBuilder.canonicalShapeKey(options: shape)
+        ElectricCaches.expiredShapes.markExpired(shapeKey: shapeKey, handle: "expired-handle")
+
+        await transport.enqueueHTTP(
+            response: httpResponse(
+                url: url,
+                statusCode: 200,
+                headers: [
+                    "electric-handle": "expired-handle",
+                    "electric-offset": "99_0",
+                    "electric-schema": #"{"id":{"type":"text"}}"#,
+                ]
+            ),
+            data: Data("[]".utf8)
+        )
+        await transport.enqueueHTTP(
+            response: httpResponse(
+                url: url,
+                statusCode: 204,
+                headers: [
+                    "electric-handle": "current-handle",
+                    "electric-offset": "5_0",
+                    "electric-schema": #"{"id":{"type":"int8"}}"#,
+                ]
+            )
+        )
+
+        let stream = ShapeStream(
+            options: shape,
+            configuration: .init(
+                subscribe: false,
+                initialState: .init(
+                    handle: "current-handle",
+                    offset: "5_0",
+                    isLive: false,
+                    isUpToDate: false,
+                    schema: ["id": .init(type: "int8", dims: nil)]
+                )
+            ),
+            transport: transport
+        )
+
+        let batch = try await stream.poll()
+        #expect(batch == nil)
+        let staleRetryState = await stream.currentState()
+        #expect(staleRetryState.handle == "current-handle")
+        #expect(staleRetryState.offset == "5_0")
+        #expect(staleRetryState.schema["id"]?.type == "int8")
+        #expect(await stream.phase() == .staleRetry)
+
+        let retried = try #require(await stream.poll())
+        #expect(retried.reachedUpToDate == true)
+        let state = await stream.currentState()
+        #expect(state.handle == "current-handle")
+        #expect(state.offset == "5_0")
+        #expect(state.schema["id"]?.type == "int8")
+
+        let requests = await transport.requests()
+        #expect(requests.count == 2)
+        let retryURL = try #require(requests.last?.url)
+        let retryQuery = try #require(URLComponents(url: retryURL, resolvingAgainstBaseURL: false)?.queryItems)
+        #expect(retryQuery.first(where: { $0.name == "handle" })?.value == "current-handle")
+        #expect(retryQuery.first(where: { $0.name == "offset" })?.value == "5_0")
+        #expect(retryQuery.first(where: { $0.name == "cache-buster" })?.value?.isEmpty == false)
+    }
+
+    @Test("Live stale cached response enters stale retry and catches up with a cache buster")
+    func liveStaleResponseEntersStaleRetry() async throws {
+        ElectricCaches.expiredShapes.clear()
+        let transport = TestShapeTransport()
+        let url = URL(string: "https://example.com/v1/shape")!
+        let shape = ShapeStreamOptions(url: url, table: "todos")
+        let shapeKey = ShapeRequestBuilder.canonicalShapeKey(options: shape)
+        ElectricCaches.expiredShapes.markExpired(shapeKey: shapeKey, handle: "expired-handle")
+
+        await transport.enqueueHTTP(
+            response: httpResponse(
+                url: url,
+                statusCode: 200,
+                headers: [
+                    "electric-handle": "expired-handle",
+                    "electric-offset": "99_0",
+                    "electric-cursor": "cursor-stale",
+                    "electric-schema": #"{"id":{"type":"text"}}"#,
+                ]
+            ),
+            data: Data("[]".utf8)
+        )
+        await transport.enqueueHTTP(
+            response: httpResponse(
+                url: url,
+                statusCode: 204,
+                headers: [
+                    "electric-handle": "good-handle",
+                    "electric-offset": "5_0",
+                    "electric-schema": #"{"id":{"type":"int8"}}"#,
+                ]
+            )
+        )
+
+        let stream = ShapeStream(
+            options: shape,
+            configuration: .init(
+                subscribe: true,
+                initialState: .init(
+                    handle: "good-handle",
+                    offset: "5_0",
+                    cursor: "cursor-live",
+                    isLive: true,
+                    isUpToDate: true,
+                    schema: ["id": .init(type: "int8", dims: nil)]
+                ),
+                preferSSE: false
+            ),
+            transport: transport
+        )
+
+        let stale = try await stream.poll()
+        #expect(stale == nil)
+        let staleState = await stream.currentState()
+        #expect(staleState.phase == .staleRetry)
+        #expect(staleState.isUpToDate == false)
+        #expect(staleState.handle == "good-handle")
+        #expect(staleState.offset == "5_0")
+        #expect(staleState.schema["id"]?.type == "int8")
+
+        let retried = try #require(await stream.poll())
+        #expect(retried.reachedUpToDate == true)
+
+        let requests = await transport.requests()
+        #expect(requests.count == 2)
+        let retryURL = try #require(requests.last?.url)
+        let retryQuery = try #require(URLComponents(url: retryURL, resolvingAgainstBaseURL: false)?.queryItems)
+        #expect(retryQuery.first(where: { $0.name == "handle" })?.value == "good-handle")
+        #expect(retryQuery.first(where: { $0.name == "offset" })?.value == "5_0")
+        #expect(retryQuery.contains(where: { $0.name == "live" }) == false)
+        #expect(retryQuery.first(where: { $0.name == "cache-buster" })?.value?.isEmpty == false)
+    }
+
+    @Test("Stale cached response does not adopt response schema when schema is empty")
+    func staleResponseDoesNotAdoptSchemaWhenSchemaIsEmpty() async throws {
         ElectricCaches.expiredShapes.clear()
         let transport = TestShapeTransport()
         let url = URL(string: "https://example.com/v1/shape")!
@@ -1345,13 +1554,7 @@ struct ShapeStreamTests {
             options: shape,
             configuration: .init(
                 subscribe: false,
-                initialState: .init(
-                    handle: "current-handle",
-                    offset: "5_0",
-                    isLive: false,
-                    isUpToDate: false,
-                    schema: ["id": .init(type: "int8", dims: nil)]
-                )
+                initialState: .init(handle: "current-handle", offset: "5_0", isLive: false, isUpToDate: false, schema: [:])
             ),
             transport: transport
         )
@@ -1359,10 +1562,10 @@ struct ShapeStreamTests {
         let batch = try await stream.poll()
         #expect(batch == nil)
         let state = await stream.currentState()
+        #expect(state.phase == .staleRetry)
+        #expect(state.schema.isEmpty)
         #expect(state.handle == "current-handle")
         #expect(state.offset == "5_0")
-        #expect(state.schema["id"]?.type == "int8")
-        #expect(await stream.phase() == .initial)
     }
 
     @Test("Stale cached response retries with cache buster when local handle is nil")
@@ -1462,6 +1665,65 @@ struct ShapeStreamTests {
         #expect(first == nil)
         let second = try #require(await stream.poll())
         #expect(second.reachedUpToDate == true)
+    }
+
+    @Test("Repeated stale cached responses retry with fresh cache busters")
+    func repeatedStaleResponsesUseFreshCacheBusters() async throws {
+        ElectricCaches.expiredShapes.clear()
+        let transport = TestShapeTransport()
+        let url = URL(string: "https://example.com/v1/shape")!
+        let shape = ShapeStreamOptions(url: url, table: "todos")
+        let shapeKey = ShapeRequestBuilder.canonicalShapeKey(options: shape)
+        ElectricCaches.expiredShapes.markExpired(shapeKey: shapeKey, handle: "expired-handle")
+
+        for _ in 0..<2 {
+            await transport.enqueueHTTP(
+                response: httpResponse(
+                    url: url,
+                    statusCode: 200,
+                    headers: [
+                        "electric-handle": "expired-handle",
+                        "electric-offset": "9_0",
+                        "electric-schema": "{}",
+                    ]
+                ),
+                data: Data("[]".utf8)
+            )
+        }
+        await transport.enqueueHTTP(
+            response: httpResponse(
+                url: url,
+                statusCode: 204,
+                headers: [
+                    "electric-handle": "fresh-handle",
+                    "electric-offset": "0_0",
+                    "electric-schema": "{}",
+                ]
+            )
+        )
+
+        let stream = ShapeStream(
+            options: shape,
+            configuration: .init(subscribe: false, maxStaleCacheRetries: 2),
+            transport: transport
+        )
+
+        #expect(try await stream.poll() == nil)
+        #expect(try await stream.poll() == nil)
+        let fresh = try #require(await stream.poll())
+        #expect(fresh.reachedUpToDate == true)
+
+        let requests = await transport.requests()
+        #expect(requests.count == 3)
+        let retryQueries = try requests.dropFirst().map { request -> [URLQueryItem] in
+            let url = try #require(request.url)
+            return try #require(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems)
+        }
+        let firstCacheBuster = retryQueries[0].first(where: { $0.name == "cache-buster" })?.value
+        let secondCacheBuster = retryQueries[1].first(where: { $0.name == "cache-buster" })?.value
+        #expect(firstCacheBuster?.isEmpty == false)
+        #expect(secondCacheBuster?.isEmpty == false)
+        #expect(firstCacheBuster != secondCacheBuster)
     }
 
     @Test("Stale cache retry exhaustion throws when stale responses keep repeating")

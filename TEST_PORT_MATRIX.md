@@ -8,6 +8,7 @@ This note tracks how the local `typescript-client/test` suite maps onto `Electri
   - Covered by `ShapeStreamTests` around `204` up-to-date and long-poll fallback semantics.
 - `shape-stream-state.test.ts`
   - Covered in Swift by `ShapeStreamTests` scenario coverage plus invariant-style tests for replay, schema adoption, `204`, stale cache, pause/resume, fast-loop recovery, and conflict reset.
+  - Additional TS-derived edge coverage includes live-state stale retry, stale response schema non-adoption, repeated stale cache busters, replay cursor preservation across non-boundary responses, and `must-refetch` `lastSyncedAt` preservation.
 - `fetch.test.ts`
   - Covered in Swift by `FetchSupportTests` and `ShapeStreamTests` for `Retry-After`, retryability, cancellation, and transient failure recovery.
 - `expired-shapes-cache.test.ts`
@@ -25,7 +26,6 @@ This note tracks how the local `typescript-client/test` suite maps onto `Electri
 
 - `client.test.ts`
   - Higher-level `Shape` consumer semantics, connection/loading status, subscriptions, unsubscribe, and public client APIs not exposed by Swift.
-  - Advanced snapshot behavior not yet implemented in Swift, including automatic re-executed sub-snapshots after `must-refetch`.
 - `stream.test.ts`
   - Request-start timing based on first subscription and other stream-wrapper lifecycle semantics that depend on a higher-level client API.
 
