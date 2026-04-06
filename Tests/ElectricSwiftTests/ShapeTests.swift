@@ -218,7 +218,22 @@ struct ShapeTests {
             )
         }
 
+        let isSnapshotRequest: @Sendable (URLRequest) -> Bool = { request in
+            guard let url = request.url,
+                  let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+                return false
+            }
+            return components.queryItems?.contains {
+                $0.name == "subset__limit" && $0.value == "1"
+            } == true
+        }
+
+        let isLiveShapeRequest: @Sendable (URLRequest) -> Bool = { request in
+            !isSnapshotRequest(request)
+        }
+
         await transport.enqueueHTTP(
+            matching: isLiveShapeRequest,
             response: httpResponse(
                 url: url,
                 statusCode: 200,
@@ -231,6 +246,7 @@ struct ShapeTests {
             data: try jsonData([ElectricMessage.upToDate()])
         )
         await transport.enqueueHTTP(
+            matching: isLiveShapeRequest,
             response: httpResponse(
                 url: url,
                 statusCode: 409,
@@ -239,6 +255,7 @@ struct ShapeTests {
             delayMilliseconds: 5_000
         )
         await transport.enqueueHTTP(
+            matching: isSnapshotRequest,
             response: httpResponse(
                 url: url,
                 statusCode: 200,
@@ -251,6 +268,7 @@ struct ShapeTests {
             data: snapshotPayload(title: "First snapshot", mark: 1)
         )
         await transport.enqueueHTTP(
+            matching: isLiveShapeRequest,
             response: httpResponse(
                 url: url,
                 statusCode: 409,
@@ -258,6 +276,7 @@ struct ShapeTests {
             )
         )
         await transport.enqueueHTTP(
+            matching: isLiveShapeRequest,
             response: httpResponse(
                 url: url,
                 statusCode: 204,
@@ -269,6 +288,7 @@ struct ShapeTests {
             )
         )
         await transport.enqueueHTTP(
+            matching: isLiveShapeRequest,
             response: httpResponse(
                 url: url,
                 statusCode: 204,
@@ -281,6 +301,7 @@ struct ShapeTests {
             delayMilliseconds: 5_000
         )
         await transport.enqueueHTTP(
+            matching: isSnapshotRequest,
             response: httpResponse(
                 url: url,
                 statusCode: 200,
@@ -293,6 +314,7 @@ struct ShapeTests {
             data: snapshotPayload(title: "Replayed snapshot", mark: 2)
         )
         await transport.enqueueHTTP(
+            matching: isSnapshotRequest,
             response: httpResponse(
                 url: url,
                 statusCode: 200,
@@ -305,6 +327,7 @@ struct ShapeTests {
             data: snapshotPayload(title: "Replayed snapshot", mark: 3)
         )
         await transport.enqueueHTTP(
+            matching: isLiveShapeRequest,
             response: httpResponse(
                 url: url,
                 statusCode: 204,

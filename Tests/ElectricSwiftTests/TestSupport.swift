@@ -97,6 +97,7 @@ func makeMockSession() -> URLSession {
 
 actor TestShapeTransport: ElectricShapeTransport {
     struct HTTPStub {
+        let matches: @Sendable (URLRequest) -> Bool
         let response: HTTPURLResponse
         let data: Data
         let error: Error?
@@ -115,6 +116,7 @@ actor TestShapeTransport: ElectricShapeTransport {
     private var storedRequests: [URLRequest] = []
 
     func enqueueHTTP(
+        matching matches: @escaping @Sendable (URLRequest) -> Bool = { _ in true },
         response: HTTPURLResponse,
         data: Data = Data(),
         error: Error? = nil,
@@ -122,6 +124,7 @@ actor TestShapeTransport: ElectricShapeTransport {
     ) {
         httpStubs.append(
             HTTPStub(
+                matches: matches,
                 response: response,
                 data: data,
                 error: error,
@@ -152,10 +155,10 @@ actor TestShapeTransport: ElectricShapeTransport {
 
     func fetch(_ request: URLRequest) async throws -> ElectricShapeHTTPResponse {
         storedRequests.append(request)
-        guard httpStubs.isEmpty == false else {
+        guard let stubIndex = httpStubs.firstIndex(where: { $0.matches(request) }) else {
             throw URLError(.badServerResponse)
         }
-        let stub = httpStubs.removeFirst()
+        let stub = httpStubs.remove(at: stubIndex)
         if let error = stub.error {
             throw error
         }
