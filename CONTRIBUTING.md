@@ -24,7 +24,7 @@ ElectricSwift uses Swift Package Manager.
 Requirements:
 
 - Swift 6.0 or newer
-- macOS 14+ for local macOS test runs
+- macOS 13+ for local macOS test runs
 - Xcode or a compatible Swift toolchain
 
 Clone the repository and run:
@@ -34,7 +34,7 @@ swift build
 swift test
 ```
 
-The package currently supports iOS 17+ and macOS 14+.
+The package currently supports iOS 16+ and macOS 13+.
 
 ## Branch and Pull Request Strategy
 

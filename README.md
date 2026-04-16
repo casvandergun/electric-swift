@@ -1,6 +1,6 @@
 # ElectricSwift
 
-`ElectricSwift` is a Swift package for consuming [ElectricSQL](https://electric-sql.com/) shape streams on Apple platforms. It gives you both a low-level stream runtime for working directly with Electric protocol batches and a higher-level typed `Shape<Model>` wrapper for in-memory materialized views. The package currently supports iOS 17+ and macOS 14+.
+`ElectricSwift` is a Swift package for consuming [ElectricSQL](https://electric-sql.com/) shape streams on Apple platforms. It gives you both a low-level stream runtime for working directly with Electric protocol batches and a higher-level typed `Shape<Model>` wrapper for in-memory materialized views. The package currently supports iOS 16+ and macOS 13+.
 
 ## Features
 
