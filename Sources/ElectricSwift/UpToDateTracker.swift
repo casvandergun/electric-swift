@@ -56,6 +56,6 @@ public final class UpToDateTracker: @unchecked Sendable {
     }
 }
 
-enum ElectricTrackers {
-    static let upToDate = UpToDateTracker()
+public enum ElectricTrackers {
+    public static let upToDate = UpToDateTracker()
 }

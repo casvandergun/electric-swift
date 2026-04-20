@@ -143,6 +143,14 @@ public actor ShapeStream {
     deinit {
         currentPollTask?.cancel()
     }
+    
+    public func reset() {
+        if !isStopped {
+            stop()
+        }
+        ElectricTrackers.upToDate.delete(shapeKey: shapeKey)
+        ElectricCaches.expiredShapes.delete(shapeKey: shapeKey)
+    }
 
     public func stop() {
         isStopped = true

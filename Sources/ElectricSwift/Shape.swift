@@ -66,6 +66,13 @@ public actor Shape<Model: Decodable & Sendable> {
     public func start() {
         ensureStarted()
     }
+    
+    public func reset() async {
+        if !isStopped {
+            await stop()
+        }
+        await stream.reset()
+    }
 
     public func stop() async {
         isStopped = true
