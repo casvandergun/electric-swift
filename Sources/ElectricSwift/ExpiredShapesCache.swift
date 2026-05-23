@@ -48,6 +48,6 @@ public final class ExpiredShapesCache: @unchecked Sendable {
     }
 }
 
-enum ElectricCaches {
-    static let expiredShapes = ExpiredShapesCache()
+public enum ElectricCaches {
+    public static let expiredShapes = ExpiredShapesCache()
 }
