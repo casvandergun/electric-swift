@@ -456,6 +456,102 @@ struct ShapeStreamTests {
         #expect(components.queryItems?.contains(.init(name: "live_sse", value: "true")) == true)
     }
 
+    @Test("SSE resumes after the last change of a multi-change transaction")
+    func sseResumesAfterLastChangeInTransaction() async throws {
+        let transport = TestShapeTransport()
+        let url = URL(string: "https://example.com/v1/shape")!
+        let schema = #"{"id":{"type":"int8"},"title":{"type":"text"}}"#
+        let headers = [
+            "electric-handle": "h-live",
+            "electric-offset": "2_0",
+            "electric-cursor": "cursor-live",
+            "electric-schema": schema,
+        ]
+        // One transaction at LSN 8 changing two rows: Electric numbers them
+        // 8_0 and 8_2, and the up-to-date reports only the LSN.
+        let first = try jsonData(ElectricMessage(
+            key: "\"public\".\"todos\"/1",
+            value: ["id": .string("1"), "title": .string("One")],
+            headers: .init(operation: .update, txids: [42], lsn: "8", opPosition: 0)
+        ))
+        let second = try jsonData(ElectricMessage(
+            key: "\"public\".\"todos\"/2",
+            value: ["id": .string("2"), "title": .string("Two")],
+            headers: .init(operation: .update, txids: [42], lsn: "8", opPosition: 2)
+        ))
+        let upToDate = try jsonData(ElectricMessage(headers: .init(control: .upToDate, globalLastSeenLSN: "8")))
+        await transport.enqueueSSE(
+            response: httpResponse(url: url, statusCode: 200, headers: headers),
+            chunks: [first, second, upToDate].map { Data("data: ".utf8) + $0 + Data("\n\n".utf8) }
+        )
+        await transport.enqueueSSE(
+            response: httpResponse(url: url, statusCode: 200, headers: headers.merging(["electric-offset": "8_2"]) { _, new in new }),
+            chunks: [Data("data: ".utf8) + upToDate + Data("\n\n".utf8)]
+        )
+
+        let stream = ShapeStream(
+            options: ShapeStreamOptions(url: url, table: "todos"),
+            configuration: .init(
+                subscribe: true,
+                initialState: .init(
+                    handle: "h-live",
+                    offset: "2_0",
+                    cursor: "cursor-live",
+                    isLive: true,
+                    isUpToDate: true,
+                    schema: try JSONDecoder().decode(ElectricSchema.self, from: Data(schema.utf8))
+                )
+            ),
+            transport: transport
+        )
+
+        let batch = try #require(await stream.poll())
+        #expect(batch.checkpoint.offset == "8_2")
+        _ = try await stream.poll()
+
+        // Resuming at 8_0 would ask the server for 8_2 again, forever.
+        let requests = await transport.requests()
+        let resumed = try #require(requests.last?.url)
+        let items = URLComponents(url: resumed, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        #expect(items.first { $0.name == "offset" }?.value == "8_2")
+    }
+
+    @Test("SSE resumes at the global LSN when it is past the last change")
+    func sseResumesAtGlobalLSNPastLastChange() async throws {
+        let transport = TestShapeTransport()
+        let url = URL(string: "https://example.com/v1/shape")!
+        let schema = #"{"id":{"type":"int8"},"title":{"type":"text"}}"#
+        let change = try jsonData(ElectricMessage(
+            key: "\"public\".\"todos\"/1",
+            value: ["id": .string("1"), "title": .string("One")],
+            headers: .init(operation: .update, lsn: "8", opPosition: 2)
+        ))
+        let upToDate = try jsonData(ElectricMessage(headers: .init(control: .upToDate, globalLastSeenLSN: "9")))
+        await transport.enqueueSSE(
+            response: httpResponse(url: url, statusCode: 200, headers: [
+                "electric-handle": "h-live",
+                "electric-offset": "2_0",
+                "electric-cursor": "cursor-live",
+                "electric-schema": schema,
+            ]),
+            chunks: [change, upToDate].map { Data("data: ".utf8) + $0 + Data("\n\n".utf8) }
+        )
+        let stream = ShapeStream(
+            options: ShapeStreamOptions(url: url, table: "todos"),
+            configuration: .init(
+                subscribe: true,
+                initialState: .init(
+                    handle: "h-live", offset: "2_0", cursor: "cursor-live", isLive: true, isUpToDate: true,
+                    schema: try JSONDecoder().decode(ElectricSchema.self, from: Data(schema.utf8))
+                )
+            ),
+            transport: transport
+        )
+
+        let batch = try #require(await stream.poll())
+        #expect(batch.checkpoint.offset == "9_0")
+    }
+
     @Test("Dynamic headers are applied to SSE requests")
     func dynamicHeadersAreAppliedToSSERequests() async throws {
         let transport = TestShapeTransport()
