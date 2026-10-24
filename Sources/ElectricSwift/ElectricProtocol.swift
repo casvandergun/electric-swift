@@ -37,6 +37,11 @@ public struct ElectricMessageHeaders: Sendable, Codable, Hashable {
     public let xmin: String?
     public let xmax: String?
     public let xipList: [String]?
+    /// The change's transaction LSN; with `opPosition` it forms the change's
+    /// log offset, `<lsn>_<opPosition>`.
+    public let lsn: String?
+    /// The change's position within its transaction.
+    public let opPosition: Int?
 
     enum CodingKeys: String, CodingKey {
         case operation
@@ -52,6 +57,8 @@ public struct ElectricMessageHeaders: Sendable, Codable, Hashable {
         case xmin
         case xmax
         case xipList = "xip_list"
+        case lsn
+        case opPosition = "op_position"
     }
 
     public init(
@@ -67,7 +74,9 @@ public struct ElectricMessageHeaders: Sendable, Codable, Hashable {
         databaseLSN: String? = nil,
         xmin: String? = nil,
         xmax: String? = nil,
-        xipList: [String]? = nil
+        xipList: [String]? = nil,
+        lsn: String? = nil,
+        opPosition: Int? = nil
     ) {
         self.operation = operation
         self.control = control
@@ -82,6 +91,8 @@ public struct ElectricMessageHeaders: Sendable, Codable, Hashable {
         self.xmin = xmin
         self.xmax = xmax
         self.xipList = xipList
+        self.lsn = lsn
+        self.opPosition = opPosition
     }
 }
 

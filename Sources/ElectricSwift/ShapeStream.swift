@@ -458,6 +458,11 @@ public actor ShapeStream {
             switch result.response.statusCode {
             case 200:
                 var pendingData = Data()
+                // Where the next request resumes. An SSE request ends at each
+                // up-to-date, and the up-to-date carries only an LSN; changes
+                // later in that transaction have offsets past `<lsn>_0`, so
+                // resuming there would receive them again on every request.
+                var resumeOffset = ShapeLogOffset(state.offset)
                 for try await chunk in result.chunks {
                     if isStopped {
                         _ = handleSSEClosure(startedAt: startedAt, wasAborted: true)
@@ -500,9 +505,20 @@ public actor ShapeStream {
                         logMessage(message, source: "sse", eventName: event.effectiveEvent)
                         bufferedMessages.append(message)
 
+                        if let lsn = message.headers.lsn,
+                           let position = message.headers.opPosition,
+                           let changeOffset = ShapeLogOffset(lsn: lsn, operation: position) {
+                            resumeOffset = ShapeLogOffset.furthest(resumeOffset, changeOffset)
+                        }
                         if message.headers.control == .upToDate {
                             if let lsn = message.headers.globalLastSeenLSN {
-                                state.offset = "\(lsn)_0"
+                                if let seen = ShapeLogOffset(lsn: lsn, operation: 0) {
+                                    let resume = ShapeLogOffset.furthest(resumeOffset, seen)
+                                    resumeOffset = resume
+                                    state.offset = resume.description
+                                } else {
+                                    state.offset = "\(lsn)_0"
+                                }
                             }
                             resetSSERecoveryState()
                             let batch = finalizeBufferedMessages(boundaryKind: state.isUpToDate ? .liveUpdate : .upToDate, isSSE: true)
@@ -1491,5 +1507,34 @@ private struct ShapeSnapshotPayload: Decodable {
         metadata = try container.decode(SnapshotMetadata.self, forKey: .metadata)
         data = try container.decode([ElectricMessage].self, forKey: .data)
         schemaFallback = nil
+    }
+}
+
+/// A position in a shape log, `<lsn>_<operation>`, ordered numerically.
+struct ShapeLogOffset: Comparable, CustomStringConvertible {
+    let lsn: UInt64
+    let operation: UInt64
+
+    init?(_ offset: String) {
+        let parts = offset.split(separator: "_", omittingEmptySubsequences: false)
+        guard parts.count == 2, let lsn = UInt64(parts[0]), let operation = UInt64(parts[1]) else { return nil }
+        self.lsn = lsn
+        self.operation = operation
+    }
+
+    init?(lsn: String, operation: Int) {
+        guard let lsn = UInt64(lsn), operation >= 0 else { return nil }
+        self.lsn = lsn
+        self.operation = UInt64(operation)
+    }
+
+    var description: String { "\(lsn)_\(operation)" }
+
+    static func < (lhs: ShapeLogOffset, rhs: ShapeLogOffset) -> Bool {
+        (lhs.lsn, lhs.operation) < (rhs.lsn, rhs.operation)
+    }
+
+    static func furthest(_ current: ShapeLogOffset?, _ candidate: ShapeLogOffset) -> ShapeLogOffset {
+        current.map { max($0, candidate) } ?? candidate
     }
 }
